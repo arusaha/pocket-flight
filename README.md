@@ -27,25 +27,31 @@ While airplane mode is on, cellular calls and mobile data are interrupted. Wi-Fi
 
 ## Install
 
-1. Download `PocketFlight-1.1.apk` from [Releases](https://github.com/arusaha/pocket-flight/releases/latest) to your phone and open it from Files. Allow that app to install unknown apps when Android asks. If Samsung Auto Blocker prevents installation, review its sideloading setting in Security and privacy.
-2. [Install Shizuku](https://shizuku.rikka.app/download/) and follow its [wireless debugging setup](https://shizuku.rikka.app/guide/setup/). Start it, open Pocket Flight, and tap **Connect / grant Shizuku access**. Approve the request in Shizuku. No rooting is needed.
-3. Tap **Allow location, Bluetooth & notifications**. For Wi-Fi exceptions, select precise location, then use **App settings** → Permissions → Location → **Allow all the time**. Keep Android's Location switch enabled. Bluetooth selection requires Nearby devices access. Notifications provide the persistent pause control.
-4. Select your exact Wi-Fi network name(s) and paired Bluetooth device(s). You can add the currently connected Wi-Fi network or type its name. Either kind of matching connection prevents airplane mode. The app remembers the choices locally.
+1. Download `PocketFlight-1.2.apk` from [Releases](https://github.com/arusaha/pocket-flight/releases/latest) to your phone and open it from Files. Allow that app to install unknown apps when Android asks. If Samsung Auto Blocker prevents installation, review its sideloading setting in Security and privacy.
+2. [Install Shizuku](https://shizuku.rikka.app/download/) and follow its [wireless debugging setup](https://shizuku.rikka.app/guide/setup/). Start it, open Pocket Flight, then tap the **settings gear → Shizuku → Connect / grant Shizuku access**. Approve the request in Shizuku. No rooting is needed.
+3. In **Settings → Permissions & battery**, tap **Allow location, Bluetooth & notifications**. For Wi-Fi exceptions, select precise location, then use **App settings** → Permissions → Location → **Allow all the time**. Keep Android's Location switch enabled. Bluetooth selection requires Nearby devices access. Notifications provide the persistent pause control.
+4. In **Settings → Connection exceptions**, select your exact Wi-Fi network name(s) and paired Bluetooth device(s). You can add the currently connected Wi-Fi network or type its name. Either kind of matching connection prevents airplane mode. The app remembers the choices locally.
 5. On Samsung, set Battery to **Unrestricted** for Pocket Flight and Shizuku. Unrestricted apps may not appear in the **Never sleeping apps** picker; if Pocket Flight is already unrestricted, leave it that way. Check that neither app is in **Sleeping apps** or **Deep sleeping apps**. In Secure lock settings, enable **Lock instantly with Side button**. Labels can vary with One UI.
-6. Run **Test proximity sensor** on both the cover and inner screens, then **Read-only connection check**. Finally tap **Start monitoring** and follow the physical test checklist below.
+6. In **Settings → Diagnostics**, run **Test proximity sensor** on both the cover and inner screens, then **Read-only connection check**. Return to the main screen, tap **Start monitoring**, and follow the physical test checklist below.
 
 After a phone restart, **start Shizuku again**. Pocket Flight attempts to resume monitoring automatically; opening it will also resume it. Android/Samsung can still stop background apps.
+
+## Version 1.2: a simpler main screen
+
+The main screen shows your current status, a flight animation, a **Start monitoring / Stop monitoring** button and a settings gear. While monitoring, the dot circles continuously and the normal subtext reads **“Waiting for your phone to be locked and pocketed”**. Starting lifts the plane; stopping settles it back. Setup problems and restoration warnings remain visible when they need attention.
+
+The gear opens settings for Shizuku, permissions and battery, connection exceptions, pocket detection, diagnostics and recent activity. The back arrow and Android Back return through settings to the main screen. Animation runs only on the visible main screen and respects Android's system animation setting. The orbit indicates that monitoring is enabled; it does not mean airplane mode is already on.
+
+To update from 1.0 or 1.1, first use **Pause & restore connectivity** in the old app, then install the 1.2 APK over it. The package and signing key are unchanged, so your saved settings are retained. Do not uninstall first. Open the app after updating. **Stop monitoring** in 1.2 performs the same pause-and-restore action; the notification still provides **Pause & restore**.
 
 ## Pocket detection on foldable phones: what's new in 1.1
 
 Version 1.0 could miss a folded phone in a pocket even when hand coverage worked. Version 1.1 adds an optional second detection path and diagnostics, and was reported working on a Galaxy Z Fold8. Proximity coverage is not a reliable proxy for every fabric, distance or fold/display state; test pocket behavior on your own phone.
 
-To update, first **Pause & restore connectivity**, then install the 1.1 APK over the existing app. It uses the same package and signing key, so your saved settings are retained; do not uninstall first. Open the app after updating.
-
-1. Under **Pocket detection**, enable **Pocket assist · darkness + tilt**. It is off by default, including after an upgrade.
+1. Under **Settings → Pocket detection**, enable **Pocket assist** (darkness + tilt). It is off by default, including after an upgrade if you have not enabled it before.
 2. Leave its light limit at **10 lux** and the confirmation delay at **5 seconds** for the first test.
 3. Start monitoring. With no selected connection active, lock the folded phone and place it in your pocket for **15 seconds**, then unlock.
-4. Open **Last pocket report**. It records proximity distance, light level, tilt, lock/screen state, selected sensors and blocking conditions. Use **Copy report** when reporting a failed test in an issue. Wi-Fi names are omitted from this diagnostic.
+4. Open **Settings → Diagnostics → Last pocket report**. It records proximity distance, light level, tilt, lock/screen state, selected sensors and blocking conditions. Use **Copy report** when reporting a failed test in an issue. Wi-Fi names are omitted from this diagnostic.
 5. If the report shows light above the chosen limit while actually pocketed, the limit can be adjusted from 1–50 lux. Higher limits can produce more false triggers. A report stuck on “waiting” identifies missing sensor readings instead of assuming darkness.
 
 Pocket assist accepts low light **and** a phone tilted at least about 35° away from flat, even when proximity says clear. It requires fresh post-screen-off readings and recent orientation data. A flat phone in darkness does not satisfy this fallback, but a tilted phone in a dark room can. Proximity remains an independent trigger, so covering it on a flat surface can still activate airplane mode. This is a heuristic, not guaranteed pocket recognition.
@@ -59,7 +65,7 @@ The confirmation timer now tolerates clear gaps up to 800 ms without discarding 
 - A connected selected network **or** device prevents entry. Pairing/saving alone does not prevent it. If a configured exception cannot be checked, entry is blocked.
 - Wi-Fi without internet still counts, including when mobile data or a VPN is the default network.
 - Once enabled by Pocket Flight, airplane mode stays on until unlock, even after you remove the phone from your pocket. Waking the lock screen alone does not restore it.
-- **Pause & restore connectivity**, in the app or notification, stops automation and turns off airplane mode enabled by this app.
+- **Stop monitoring** in the app, or **Pause & restore** in the notification, stops automation and turns off airplane mode enabled by this app.
 - Manually enabled airplane mode is left unchanged. Manually switching airplane mode off while locked suppresses re-entry for that lock session.
 - Active Android call/communication audio modes block entry. This is a best-effort extra check, not a guarantee against every OEM or app-specific call implementation.
 - Changes are serialized and checked again after Bluetooth lookup. A durable ownership marker helps recover after a process restart. An unlock during an in-flight enable is followed by a restore.
@@ -89,7 +95,7 @@ Android restricts access to Wi-Fi network names using location permissions and t
 
 ### Does removing the phone from my pocket turn airplane mode off?
 
-Unlocking does. Once Pocket Flight enables airplane mode, taking the phone out or waking the lock screen alone does not turn it off. You can also use **Pause & restore connectivity**. If Shizuku stops while airplane mode is on, turn airplane mode off manually in Quick Settings.
+Unlocking does. Once Pocket Flight enables airplane mode, taking the phone out or waking the lock screen alone does not turn it off. You can also use **Stop monitoring** or the notification's **Pause & restore**. If Shizuku stops while airplane mode is on, turn airplane mode off manually in Quick Settings.
 
 ## Real limitations
 
@@ -149,6 +155,8 @@ The published personal-use APK is non-debuggable and signed with the original de
 - Privileged, fixed-command interface: `FlightBridgeService.java`
 
 Tests exercise entry guards, restoration precedence, manual ownership, exception uncertainty, Wi-Fi name handling, darkness/tilt conditions, stale or invalid readings, flicker timing, timer resets and diagnostic retention. Hardware sensing, Shizuku's shell permissions, Samsung background behavior and actual radio changes require the phone checklist above.
+
+Version 1.2 also has Robolectric checks for the native UI, settings navigation, saved preferences, restoration controls and animation lifecycle, plus pure tests that keep restoration and setup errors visible on the home screen. Native-rendered UI previews are written under `app/build/ui-preview/` during the UI tests. These checks do not replace a test on your physical phone.
 
 ## Platform references
 

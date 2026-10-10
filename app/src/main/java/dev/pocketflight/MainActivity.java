@@ -14,6 +14,8 @@ import android.os.*;
 import android.provider.Settings;
 import android.view.*;
 import android.widget.*;
+import android.window.OnBackInvokedCallback;
+import android.window.OnBackInvokedDispatcher;
 import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -25,8 +27,15 @@ public class MainActivity extends Activity {
     private AppPrefs prefs;
     private ShizukuBridge bridge;
     private LinearLayout column;
-    private TextView status, access, wifiSummary, btSummary, sensorStatus, history;
+    private FrameLayout content;
+    private TextView pageTitle, status, statusDetail, access, wifiSummary, btSummary, sensorStatus, history, detectionSummary;
+    private ImageButton back, gear;
     private Button toggle;
+    private FlightArtworkView artwork;
+    private enum Page { HOME, SETTINGS, SHIZUKU, PERMISSIONS, CONNECTIONS, DETECTION, DIAGNOSTICS, ACTIVITY }
+    private Page page = Page.HOME;
+    private OnBackInvokedCallback backCallback;
+    private boolean backRegistered;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private AlertDialog sensorDialog;
@@ -39,6 +48,10 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         prefs = new AppPrefs(this);
         buildUi();
+        if (savedInstanceState != null) {
+            try { showPage(Page.valueOf(savedInstanceState.getString("page", "HOME"))); }
+            catch (IllegalArgumentException ignored) { showPage(Page.HOME); }
+        }
         bridge = new ShizukuBridge(this, () -> main.post(this::refresh));
     }
     private int dp(int size) { return Math.round(size * getResources().getDisplayMetrics().density); }
@@ -74,36 +87,124 @@ public class MainActivity extends Activity {
         column.addView(card); return card;
     }
     private void buildUi() {
-        ScrollView scroll = new ScrollView(this); scroll.setFillViewport(true); scroll.setBackgroundColor(BG);
-        FrameLayout frame = new FrameLayout(this);
-        column = new LinearLayout(this); column.setOrientation(LinearLayout.VERTICAL); column.setPadding(dp(20), dp(28), dp(20), dp(30));
-        FrameLayout.LayoutParams layout = new FrameLayout.LayoutParams(-1, -2, Gravity.TOP | Gravity.CENTER_HORIZONTAL);
-        frame.addView(column, layout); scroll.addView(frame);
-        scroll.setOnApplyWindowInsetsListener((v, insets) -> {
+        LinearLayout root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setBackgroundColor(BG);
+        root.setOnApplyWindowInsetsListener((v, insets) -> {
             var bars = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
             v.setPadding(bars.left, bars.top, bars.right, bars.bottom); return insets;
         });
-        frame.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
-            int width = Math.min(r - l, dp(760));
-            if (column.getLayoutParams().width != width) { column.getLayoutParams().width = width; column.requestLayout(); }
-        });
-        setContentView(scroll);
-        TextView eyebrow = text("PERSONAL AUTOMATION", 11, GREEN, true); eyebrow.setLetterSpacing(0.15f); column.addView(eyebrow);
-        column.addView(text("Pocket Flight", 38, INK, true));
-        column.addView(text("Disconnect in your pocket.\nReconnect when you unlock.", 17, MUTED, false));
-        LinearLayout hero = card(null, null); hero.setBackground(background(Color.rgb(221, 235, 218), 24));
-        hero.addView(text("YOUR POCKET, YOUR RULES", 11, GREEN, true));
-        status = text("Paused", 22, INK, true); hero.addView(status);
-        hero.addView(text("Screen off + phone locked + pocket detected. Airplane mode stays on until you unlock.", 14, MUTED, false));
-        toggle = button("Start monitoring", true, this::toggleMonitoring); hero.addView(toggle);
-
-        LinearLayout setup = card("01  ·  Connect Shizuku", "Required to switch airplane mode on your Z Fold8. Start Shizuku again after each reboot.");
+        LinearLayout header = new LinearLayout(this); header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setPadding(dp(16), dp(12), dp(16), dp(12)); header.setMinimumHeight(dp(80));
+        back = iconButton(R.drawable.ic_back, "Back", this::navigateBack); header.addView(back);
+        pageTitle = text("Pocket Flight", 22, INK, true); pageTitle.setPadding(dp(8), 0, dp(8), 0);
+        header.addView(pageTitle, new LinearLayout.LayoutParams(0, -2, 1));
+        gear = iconButton(R.drawable.ic_settings, "Settings", () -> showPage(Page.SETTINGS)); header.addView(gear);
+        root.addView(header);
+        content = new FrameLayout(this); root.addView(content, new LinearLayout.LayoutParams(-1, 0, 1));
+        setContentView(root);
+        if (Build.VERSION.SDK_INT >= 33) backCallback = this::navigateBack;
+        showPage(Page.HOME);
+    }
+    private ImageButton iconButton(int drawable, String description, Runnable action) {
+        ImageButton button = new ImageButton(this); button.setImageResource(drawable); button.setColorFilter(GREEN);
+        button.setContentDescription(description); button.setTooltipText(description); button.setPadding(dp(12), dp(12), dp(12), dp(12));
+        android.util.TypedValue selectable = new android.util.TypedValue();
+        getTheme().resolveAttribute(android.R.attr.selectableItemBackgroundBorderless, selectable, true);
+        button.setBackgroundResource(selectable.resourceId); button.setLayoutParams(new LinearLayout.LayoutParams(dp(48), dp(48)));
+        button.setOnClickListener(v -> action.run()); return button;
+    }
+    private void showPage(Page next) {
+        if (artwork != null) artwork.setForeground(false);
+        page = next;
+        status = statusDetail = access = wifiSummary = btSummary = sensorStatus = history = detectionSummary = null;
+        toggle = null; artwork = null; content.removeAllViews();
+        gear.setVisibility(next == Page.HOME ? View.VISIBLE : View.GONE);
+        back.setVisibility(next == Page.HOME ? View.GONE : View.VISIBLE);
+        back.setContentDescription(next == Page.SETTINGS ? "Back to main screen" : "Back to settings");
+        String title = switch (next) {
+            case HOME -> "Pocket Flight"; case SETTINGS -> "Settings"; case SHIZUKU -> "Shizuku";
+            case PERMISSIONS -> "Permissions & battery"; case CONNECTIONS -> "Connection exceptions";
+            case DETECTION -> "Pocket detection"; case DIAGNOSTICS -> "Diagnostics"; case ACTIVITY -> "Recent activity";
+        };
+        pageTitle.setText(title); pageTitle.setAccessibilityPaneTitle(title);
+        if (Build.VERSION.SDK_INT >= 33 && backCallback != null) {
+            if (next != Page.HOME && !backRegistered) {
+                getOnBackInvokedDispatcher().registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT, backCallback);
+                backRegistered = true;
+            } else if (next == Page.HOME && backRegistered) {
+                getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(backCallback); backRegistered = false;
+            }
+        }
+        ScrollView scroll = new ScrollView(this); scroll.setFillViewport(true); scroll.setClipToPadding(false);
+        FrameLayout frame = new FrameLayout(this) {
+            @Override protected void onMeasure(int widthSpec, int heightSpec) {
+                if (getChildCount() > 0) {
+                    getChildAt(0).getLayoutParams().width = Math.min(MeasureSpec.getSize(widthSpec), dp(next == Page.HOME ? 420 : 600));
+                }
+                super.onMeasure(widthSpec, heightSpec);
+            }
+        };
+        column = new LinearLayout(this); column.setOrientation(LinearLayout.VERTICAL);
+        column.setPadding(dp(next == Page.HOME ? 28 : 20), dp(12), dp(next == Page.HOME ? 28 : 20), dp(next == Page.HOME ? 48 : 28));
+        frame.addView(column, new FrameLayout.LayoutParams(-1, -2, Gravity.CENTER_HORIZONTAL | (next == Page.HOME ? Gravity.CENTER_VERTICAL : Gravity.TOP)));
+        scroll.addView(frame); content.addView(scroll);
+        switch (next) {
+            case HOME -> buildHome(); case SETTINGS -> buildSettings(); case SHIZUKU -> buildShizuku();
+            case PERMISSIONS -> buildPermissions(); case CONNECTIONS -> buildConnections();
+            case DETECTION -> buildDetection(); case DIAGNOSTICS -> buildDiagnostics(); case ACTIVITY -> buildActivity();
+        }
+        refresh();
+    }
+    private void buildHome() {
+        artwork = new FlightArtworkView(this);
+        LinearLayout.LayoutParams artLayout = new LinearLayout.LayoutParams(dp(216), dp(216));
+        artLayout.gravity = Gravity.CENTER_HORIZONTAL; artLayout.bottomMargin = dp(26); column.addView(artwork, artLayout);
+        artwork.setMonitoring(prefs.enabled(), false); artwork.setForeground(resumed);
+        status = text("Paused", 32, INK, true); status.setGravity(Gravity.CENTER); column.addView(status);
+        statusDetail = text("Automation is off", 15, MUTED, false); statusDetail.setGravity(Gravity.CENTER);
+        statusDetail.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        LinearLayout.LayoutParams detailLayout = (LinearLayout.LayoutParams) statusDetail.getLayoutParams(); detailLayout.bottomMargin = dp(32);
+        column.addView(statusDetail);
+        toggle = button("Start monitoring", true, this::toggleMonitoring); toggle.setMinHeight(dp(58)); column.addView(toggle);
+    }
+    private LinearLayout settingsGroup(String label) {
+        TextView heading = text(label, 11, GREEN, true); heading.setLetterSpacing(0.1f); heading.setPadding(dp(12), dp(10), 0, 0); column.addView(heading);
+        LinearLayout group = card(null, null); group.setPadding(0, 0, 0, 0); return group;
+    }
+    private TextView settingsRow(LinearLayout group, String title, String summary, Page destination) {
+        if (group.getChildCount() > 0) {
+            View divider = new View(this); divider.setBackgroundColor(Color.rgb(237, 240, 233)); group.addView(divider, new LinearLayout.LayoutParams(-1, dp(1)));
+        }
+        LinearLayout row = new LinearLayout(this); row.setGravity(Gravity.CENTER_VERTICAL); row.setPadding(dp(16), dp(18), dp(16), dp(18)); row.setMinimumHeight(dp(78));
+        android.util.TypedValue ripple = new android.util.TypedValue(); getTheme().resolveAttribute(android.R.attr.selectableItemBackground, ripple, true); row.setBackgroundResource(ripple.resourceId);
+        row.setFocusable(true); row.setOnClickListener(v -> showPage(destination));
+        LinearLayout labels = new LinearLayout(this); labels.setOrientation(LinearLayout.VERTICAL);
+        TextView name = text(title, 15, INK, true); labels.addView(name); ((LinearLayout.LayoutParams) name.getLayoutParams()).bottomMargin = dp(4);
+        TextView detail = text(summary, 12, MUTED, false); labels.addView(detail); ((LinearLayout.LayoutParams) detail.getLayoutParams()).bottomMargin = 0;
+        row.addView(labels, new LinearLayout.LayoutParams(0, -2, 1));
+        ImageView chevron = new ImageView(this); chevron.setImageResource(R.drawable.ic_chevron); chevron.setColorFilter(MUTED); chevron.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        row.addView(chevron, new LinearLayout.LayoutParams(dp(18), dp(18))); group.addView(row); return detail;
+    }
+    private void buildSettings() {
+        LinearLayout setup = settingsGroup("SETUP");
+        access = settingsRow(setup, "Shizuku", "Checking access…", Page.SHIZUKU);
+        settingsRow(setup, "Permissions & battery", "Background access and reliability", Page.PERMISSIONS);
+        LinearLayout automation = settingsGroup("AUTOMATION");
+        settingsRow(automation, "Connection exceptions", "Wi-Fi networks and Bluetooth devices", Page.CONNECTIONS);
+        detectionSummary = settingsRow(automation, "Pocket detection", "", Page.DETECTION);
+        LinearLayout troubleshooting = settingsGroup("TROUBLESHOOTING");
+        settingsRow(troubleshooting, "Diagnostics", "Sensor test, connection check and report", Page.DIAGNOSTICS);
+        settingsRow(troubleshooting, "Recent activity", "See what the app has been doing", Page.ACTIVITY);
+        TextView footer = text("On-device only · No account · No analytics", 11, MUTED, false); footer.setGravity(Gravity.CENTER); column.addView(footer);
+    }
+    private void buildShizuku() {
+        LinearLayout setup = card(null, "Required to switch airplane mode. Start Shizuku again after each reboot.");
         access = text("Checking access…", 14, GREEN, true); setup.addView(access);
         setup.addView(button("Connect / grant Shizuku access", true, this::authorize));
-        setup.addView(button("Read-only connection check", false, this::diagnostics));
         setup.addView(button("Shizuku setup guide ↗", false, () -> open(new Intent(Intent.ACTION_VIEW, Uri.parse("https://shizuku.rikka.app/guide/setup/")))));
-
-        LinearLayout exceptions = card("02  ·  Stay connected here", "Any selected Wi-Fi network OR Bluetooth device prevents airplane mode while connected. Saved or paired alone does not count.");
+        column.addView(text("If Shizuku stops while airplane mode is on, restore connectivity in Quick Settings.", 13, MUTED, false));
+    }
+    private void buildConnections() {
+        LinearLayout exceptions = card("Stay connected here", "Any selected Wi-Fi network OR Bluetooth device prevents airplane mode while connected. Saved or paired alone does not count.");
         exceptions.addView(text("WI-FI NETWORKS", 11, GREEN, true));
         wifiSummary = text("None selected", 15, INK, false); exceptions.addView(wifiSummary);
         exceptions.addView(button("Choose Wi-Fi exceptions", false, this::wifiDialog));
@@ -111,12 +212,11 @@ public class MainActivity extends Activity {
         btSummary = text("None selected", 15, INK, false); exceptions.addView(btSummary);
         exceptions.addView(button("Choose paired devices", false, this::bluetoothDialog));
         exceptions.addView(text("If a selected exception cannot be checked, the app stays online.", 13, MUTED, false));
-
-        LinearLayout detection = card("03  ·  Pocket detection", "Proximity can detect a hand but miss loose or dark fabric. Try Pocket assist if the folded phone is missed in your pocket.");
-        sensorStatus = text("Sensor not checked", 14, INK, false); detection.addView(sensorStatus);
-        detection.addView(button("Test proximity sensor", false, this::sensorDiagnostic));
+    }
+    private void buildDetection() {
+        LinearLayout detection = card(null, "Try Pocket assist if proximity alone misses the folded phone in your pocket.");
         Switch assist = new Switch(this);
-        assist.setText("Pocket assist · darkness + tilt"); assist.setTextSize(15); assist.setTextColor(INK);
+        assist.setText("Pocket assist\nDarkness + tilt"); assist.setTextSize(15); assist.setTextColor(INK);
         assist.setMinHeight(dp(56)); assist.setChecked(prefs.pocketAssist()); detection.addView(assist);
         detection.addView(text("Adds a fallback when proximity stays clear: low light and a phone tilted at least 35° from flat, held for the confirmation delay. A tilted phone in a dark room can also trigger. This mode can use more battery while locked.", 13, MUTED, false));
         TextView lightLabel = text("Pocket assist light limit: " + Math.round(prefs.darkLux()) + " lux", 14, INK, true); detection.addView(lightLabel);
@@ -131,8 +231,7 @@ public class MainActivity extends Activity {
             @Override public void onStartTrackingTouch(SeekBar bar) {}
             @Override public void onStopTrackingTouch(SeekBar bar) { prefs.data.edit().putInt("dark_lux", bar.getProgress() + 1).apply(); }
         });
-        detection.addView(button("Last pocket report", false, this::showPocketReport));
-        detection.addView(text("While monitoring, lock the folded phone, put it in your pocket for 15 seconds, then unlock. The report saves the readings and any reason the app stayed online.", 13, MUTED, false));
+        detection.addView(text("After a pocket test, open Settings → Diagnostics → Last pocket report to check the readings.", 13, MUTED, false));
         TextView delayLabel = text("Confirmation delay: " + prefs.delayMillis() / 1000 + " seconds", 14, INK, true); detection.addView(delayLabel);
         SeekBar delay = new SeekBar(this); delay.setMax(13); delay.setProgress((int) prefs.delayMillis() / 1000 - 2);
         delay.setContentDescription("Pocket confirmation delay, 2 to 15 seconds"); detection.addView(delay);
@@ -141,30 +240,45 @@ public class MainActivity extends Activity {
             @Override public void onStartTrackingTouch(SeekBar bar) {}
             @Override public void onStopTrackingTouch(SeekBar bar) { prefs.data.edit().putInt("delay_seconds", bar.getProgress() + 2).commit(); }
         });
-
-        LinearLayout reliability = card("04  ·  Permissions & reliability", "Wi-Fi names require precise location and “Allow all the time”, plus the phone’s Location switch. No GPS coordinates are requested or stored.");
+    }
+    private void buildPermissions() {
+        LinearLayout reliability = card("Permissions & reliability", "Wi-Fi names require precise location and “Allow all the time”, plus the phone’s Location switch. No GPS coordinates are requested or stored.");
         reliability.addView(button("Allow location, Bluetooth & notifications", false, this::requestPermissions));
         reliability.addView(button("App settings · location & battery", false, this::appSettings));
-        reliability.addView(text("Samsung: set Battery to Unrestricted and add Pocket Flight and Shizuku to Never sleeping apps. Enable “Lock instantly with Side button” in Secure lock settings.", 14, MUTED, false));
+        reliability.addView(text("Samsung: set Battery to Unrestricted for Pocket Flight and Shizuku. Unrestricted apps may be absent from Never sleeping apps; leave them unrestricted. Keep both out of Sleeping and Deep sleeping apps. Enable “Lock instantly with Side button” in Secure lock settings.", 14, MUTED, false));
         reliability.addView(text("Monitoring has a persistent notification. If your sensor cannot wake the phone, the app keeps the CPU awake while checking with the screen off; this uses more battery.", 13, MUTED, false));
-
+    }
+    private void buildDiagnostics() {
+        LinearLayout diagnostics = card(null, null);
+        diagnostics.addView(button("Test proximity sensor", false, this::sensorDiagnostic));
+        diagnostics.addView(button("Read-only connection check", false, this::diagnostics));
+        diagnostics.addView(button("Last pocket report", false, this::showPocketReport));
+        sensorStatus = text("Use the sensor test before your first pocket test", 13, MUTED, false); diagnostics.addView(sensorStatus);
+        column.addView(text("While monitoring, lock the phone, pocket it for 15 seconds, then unlock. The last pocket report saves readings and any reason the app stayed online.", 13, MUTED, false));
+    }
+    private void buildActivity() {
         LinearLayout activity = card("Recent activity", null); history = text("No activity yet", 13, MUTED, false); activity.addView(history);
         column.addView(text("On-device only · No account · No analytics\nManually enabled airplane mode is left unchanged.\nAirplane mode interrupts cellular calls and mobile data. If Shizuku stops while offline, restore connectivity in Quick Settings.", 12, MUTED, false));
     }
 
     private void refresh() {
-        if (isFinishing() || status == null) return;
-        status.setText(prefs.data.getString("status", "Paused"));
-        toggle.setText(prefs.enabled() ? "Pause & restore connectivity" : prefs.owned() ? "Retry restoring connectivity" : "Start monitoring");
-        access.setText(bridge != null && bridge.ready() ? "✓ Shizuku connected" : ShizukuBridge.authorized() ? "Starting connection…" : "Setup needed · Shizuku access");
+        if (isFinishing()) return;
+        boolean ready = bridge != null && bridge.ready();
+        if (status != null) {
+            HomeStatus display = HomeStatus.from(prefs.enabled(), prefs.owned(), ready, ShizukuBridge.authorized(), prefs.data.getString("status", "Paused"));
+            status.setText(display.title()); statusDetail.setText(display.detail()); toggle.setText(display.button());
+            artwork.setMonitoring(prefs.enabled(), resumed);
+        }
+        if (access != null) access.setText(ready ? "✓ Shizuku connected" : ShizukuBridge.authorized() ? "Starting connection…" : "Setup needed · Shizuku access");
+        if (detectionSummary != null) detectionSummary.setText("Pocket assist " + (prefs.pocketAssist() ? "on" : "off") + " · " + prefs.delayMillis() / 1000 + " second delay");
         Set<String> wifi = prefs.wifi();
-        wifiSummary.setText(wifi.isEmpty() ? "No Wi-Fi exceptions selected" : String.join("\n", new TreeSet<>(wifi)));
+        if (wifiSummary != null) wifiSummary.setText(wifi.isEmpty() ? "No Wi-Fi exceptions selected" : String.join("\n", new TreeSet<>(wifi)));
         Set<String> bt = prefs.bluetooth();
         ArrayList<String> labels = new ArrayList<>();
         for (String address : new TreeSet<>(bt)) labels.add(prefs.data.getString("device_" + address, address));
-        btSummary.setText(labels.isEmpty() ? "No Bluetooth exceptions selected" : String.join("\n", labels));
-        sensorStatus.setText(prefs.data.getString("sensor", "Use the sensor test before your first pocket test"));
-        history.setText(prefs.data.getString("history", "No activity yet"));
+        if (btSummary != null) btSummary.setText(labels.isEmpty() ? "No Bluetooth exceptions selected" : String.join("\n", labels));
+        if (sensorStatus != null) sensorStatus.setText(prefs.data.getString("sensor", "Use the sensor test before your first pocket test"));
+        if (history != null) history.setText(prefs.data.getString("history", "No activity yet"));
     }
     private void toggleMonitoring() {
         if (prefs.enabled() || prefs.owned()) {
@@ -319,13 +433,27 @@ public class MainActivity extends Activity {
     private void open(Intent intent) { try { startActivity(intent); } catch (RuntimeException e) { toast("No app available to open this screen"); } }
     private void toast(String message) { Toast.makeText(this, message, Toast.LENGTH_LONG).show(); }
     private void message(String title, String message) { new AlertDialog.Builder(this).setTitle(title).setMessage(message).setPositiveButton("OK", null).show(); }
+    private void navigateBack() { showPage(page == Page.SETTINGS ? Page.HOME : Page.SETTINGS); }
+    @Override @SuppressWarnings("deprecation") public void onBackPressed() {
+        if (page != Page.HOME) navigateBack(); else super.onBackPressed();
+    }
+    @Override protected void onSaveInstanceState(Bundle out) {
+        out.putString("page", page.name()); super.onSaveInstanceState(out);
+    }
     @Override public void onResume() {
         super.onResume(); resumed = true;
+        if (artwork != null) artwork.setForeground(true);
         if (prefs.enabled() || prefs.owned()) startMonitor(null);
         main.post(refreshTick);
     }
-    @Override public void onPause() { resumed = false; main.removeCallbacks(refreshTick); super.onPause(); }
+    @Override public void onPause() {
+        resumed = false; main.removeCallbacks(refreshTick);
+        if (artwork != null) artwork.setForeground(false);
+        super.onPause();
+    }
     @Override public void onDestroy() {
+        if (Build.VERSION.SDK_INT >= 33 && backRegistered) getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(backCallback);
+        if (artwork != null) artwork.setForeground(false);
         if (sensorDialog != null) sensorDialog.dismiss();
         if (bridge != null) bridge.close();
         worker.shutdown(); main.removeCallbacksAndMessages(null); super.onDestroy();
