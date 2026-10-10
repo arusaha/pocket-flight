@@ -1,8 +1,29 @@
-# Pocket Flight
+# Pocket Flight: Automatic Airplane Mode for Android
 
-A personal, sideloadable Android app for automatically enabling airplane mode when your phone is locked in a pocket and restoring connectivity when you unlock it. Uses Shizuku on an unrooted phone. Version 1.1 has been reported working on a Galaxy Z Fold8 running Android 17.
+**Pocket it. Disconnect. Unlock. Reconnect.**
 
-[Download the latest APK](https://github.com/arusaha/pocket-flight/releases/latest) · [Report an issue](https://github.com/arusaha/pocket-flight/issues)
+Pocket Flight is an Android airplane mode automation app that turns airplane mode on when your phone is locked and detects that it is in your pocket, then turns it off when you unlock. Choose Wi-Fi networks and Bluetooth devices that keep your phone connected, so your home network, headphones or watch can prevent the pocket trigger while connected.
+
+Fewer trips to Quick Settings. A simple routine built around putting your phone away and picking it up again. Runs on your phone with **no ads, no account and no analytics**. Works without root using **Shizuku**, which requires setup first.
+
+**[Download the Android APK](https://github.com/arusaha/pocket-flight/releases/latest)** · [Setup guide](#install) · [FAQ](#frequently-asked-questions) · [Report an issue](https://github.com/arusaha/pocket-flight/issues)
+
+## What Pocket Flight does
+
+- **Automates airplane mode:** lock your phone, put it in your pocket and let sustained pocket detection trigger the switch. Unlock to turn off airplane mode enabled by the app.
+- **Respects your connections:** a connection to any selected Wi-Fi network or Bluetooth device prevents airplane mode from turning on. A saved network or paired device alone does not count.
+- **Adapts to your pocket:** proximity detection plus optional **Pocket assist**, which combines darkness and tilt when proximity alone misses your pocket. Adjust the confirmation delay from 2–15 seconds.
+- **Keeps you in control:** pause and restore connectivity from the persistent notification. Airplane mode you enabled manually stays under your control.
+- **Keeps settings on your phone:** no Internet permission, cloud account or GPS coordinate collection. Connection choices and diagnostics stay in app-private storage.
+- **Helps troubleshoot your phone:** a live sensor test and saved pocket report show what the detector sees.
+
+## Before you install
+
+Requires **Android 11 or newer**, a working [Shizuku setup](https://shizuku.rikka.app/guide/setup/), suitable sensors and permission to run in the background. Download the APK and sideload it directly; no Play Store installation is needed. On an unrooted phone, start Shizuku again after each reboot.
+
+Version 1.1 has been **reported working on a Galaxy Z Fold8 running Android 17**, including folded pocket use after the detection update. Other phones and firmware need their own testing. Pocket sensing is a heuristic; optional Pocket assist can also trigger on a tilted phone in darkness.
+
+While airplane mode is on, cellular calls and mobile data are interrupted. Wi-Fi and Bluetooth follow Android's airplane mode preferences. Sensor monitoring can use extra battery; this app does not promise battery savings.
 
 ## Install
 
@@ -10,12 +31,12 @@ A personal, sideloadable Android app for automatically enabling airplane mode wh
 2. [Install Shizuku](https://shizuku.rikka.app/download/) and follow its [wireless debugging setup](https://shizuku.rikka.app/guide/setup/). Start it, open Pocket Flight, and tap **Connect / grant Shizuku access**. Approve the request in Shizuku. No rooting is needed.
 3. Tap **Allow location, Bluetooth & notifications**. For Wi-Fi exceptions, select precise location, then use **App settings** → Permissions → Location → **Allow all the time**. Keep Android's Location switch enabled. Bluetooth selection requires Nearby devices access. Notifications provide the persistent pause control.
 4. Select your exact Wi-Fi network name(s) and paired Bluetooth device(s). You can add the currently connected Wi-Fi network or type its name. Either kind of matching connection prevents airplane mode. The app remembers the choices locally.
-5. On Samsung, set Battery to **Unrestricted** for Pocket Flight and Shizuku and add them to **Never sleeping apps**. In Secure lock settings, enable **Lock instantly with Side button**. Labels can vary with One UI.
+5. On Samsung, set Battery to **Unrestricted** for Pocket Flight and Shizuku. Unrestricted apps may not appear in the **Never sleeping apps** picker; if Pocket Flight is already unrestricted, leave it that way. Check that neither app is in **Sleeping apps** or **Deep sleeping apps**. In Secure lock settings, enable **Lock instantly with Side button**. Labels can vary with One UI.
 6. Run **Test proximity sensor** on both the cover and inner screens, then **Read-only connection check**. Finally tap **Start monitoring** and follow the physical test checklist below.
 
 After a phone restart, **start Shizuku again**. Pocket Flight attempts to resume monitoring automatically; opening it will also resume it. Android/Samsung can still stop background apps.
 
-## Version 1.1: detects more than a hand
+## Pocket detection on foldable phones: what's new in 1.1
 
 Version 1.0 could miss a folded phone in a pocket even when hand coverage worked. Version 1.1 adds an optional second detection path and diagnostics, and was reported working on a Galaxy Z Fold8. Proximity coverage is not a reliable proxy for every fabric, distance or fold/display state; test pocket behavior on your own phone.
 
@@ -43,6 +64,32 @@ The confirmation timer now tolerates clear gaps up to 800 ms without discarding 
 - Active Android call/communication audio modes block entry. This is a best-effort extra check, not a guarantee against every OEM or app-specific call implementation.
 - Changes are serialized and checked again after Bluetooth lookup. A durable ownership marker helps recover after a process restart. An unlock during an in-flight enable is followed by a restore.
 - No account, analytics, GPS coordinate collection, advertising or Internet permission. Network names, device addresses, the last 30 activity messages and one bounded pocket diagnostic stay in app-private storage; Android backup is disabled.
+
+## Frequently asked questions
+
+### Can I automate airplane mode on Android without root?
+
+Yes, with Pocket Flight and Shizuku on a supported phone. Android does not let ordinary apps toggle airplane mode directly, so Pocket Flight uses Shizuku's elevated access to run the system command. Wireless debugging setup and a Shizuku permission grant are required; restart Shizuku after reboot. See the [installation steps](#install).
+
+### Can I keep airplane mode off when connected to home Wi-Fi or a Bluetooth device?
+
+Yes. Select your Wi-Fi network names and paired Bluetooth devices in the app. If any selected connection is active, Pocket Flight will not enable airplane mode. You can use this for home Wi-Fi, headphones, a smartwatch or another connected Bluetooth device. If the app cannot verify a configured exception, it blocks entry into airplane mode.
+
+### Does Pocket Flight work with a Samsung Galaxy Fold?
+
+Version 1.1 has one successful user report on a Galaxy Z Fold8 running Android 17. Optional Pocket assist was added after proximity detection worked under a hand but missed the folded phone in a pocket. Results depend on sensors, clothing, firmware and background settings; follow the [phone test checklist](#physical-verification-on-your-phone) for your device.
+
+### Does automatic airplane mode save battery?
+
+Battery savings have not been measured. Switching radios off can reduce their activity, but monitoring sensors and keeping the CPU awake when needed consumes power. Pocket assist can add to that cost. Treat Pocket Flight as a connectivity automation tool and compare battery use on your own phone.
+
+### Why does it need location permission for Wi-Fi exceptions?
+
+Android restricts access to Wi-Fi network names using location permissions and the system Location switch. Pocket Flight needs that access to match your selected networks while locked. It does not collect GPS coordinates or send your network names to a server.
+
+### Does removing the phone from my pocket turn airplane mode off?
+
+Unlocking does. Once Pocket Flight enables airplane mode, taking the phone out or waking the lock screen alone does not turn it off. You can also use **Pause & restore connectivity**. If Shizuku stops while airplane mode is on, turn airplane mode off manually in Quick Settings.
 
 ## Real limitations
 
