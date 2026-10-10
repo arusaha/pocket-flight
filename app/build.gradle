@@ -1,0 +1,32 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'dev.pocketflight'
+    compileSdk 35
+    defaultConfig {
+        applicationId 'dev.pocketflight'
+        minSdk 30
+        targetSdk 35
+        versionCode 2
+        versionName '1.1'
+    }
+    buildFeatures { aidl true; buildConfig true }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.debug
+        }
+    }
+    lint { abortOnError true }
+}
+
+dependencies {
+    compileOnly 'androidx.annotation:annotation:1.3.0'
+    implementation 'dev.rikka.shizuku:api:13.1.5'
+    implementation 'dev.rikka.shizuku:provider:13.1.5'
+    testImplementation 'junit:junit:4.13.2'
+}
