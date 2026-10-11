@@ -8,6 +8,16 @@ Fewer trips to Quick Settings. A simple routine built around putting your phone 
 
 **[Download the Android APK](https://github.com/arusaha/pocket-flight/releases/latest)** · [Setup guide](#install) · [FAQ](#frequently-asked-questions) · [Report an issue](https://github.com/arusaha/pocket-flight/issues)
 
+## Walk. Run. Give your phone a signal break.
+
+**More time in motion. Less cellular radio activity in your pocket.**
+
+Heading out for a morning walk, a run or a weekend hike? Lock your phone, slip it into your pocket and let Pocket Flight switch on airplane mode once pocket detection confirms it. Unlock when you need your phone, and Pocket Flight turns airplane mode back off so it can reconnect. One less setting to remember before you head out.
+
+If you prefer to reduce your phone's radio-frequency electromagnetic field (**EMF**) emissions while carrying it close to your body, Pocket Flight makes the airplane-mode habit automatic. Airplane mode disables cellular connectivity, stopping normal cellular transmissions while it is on. Your selected Wi-Fi and Bluetooth exceptions still apply, so a connected device you have chosen can keep the phone online.
+
+Wi-Fi and Bluetooth can remain active according to [Android's remembered airplane-mode settings](https://support.google.com/pixelphone/answer/12639358?hl=en). Pocket Flight does not measure EMF exposure or promise health benefits, and airplane mode does not eliminate all EMF. Cellular calls and mobile data are unavailable while it is on.
+
 ## What Pocket Flight does
 
 - **Automates airplane mode:** lock your phone, put it in your pocket and let sustained pocket detection trigger the switch. Unlock to turn off airplane mode enabled by the app.
@@ -80,6 +90,14 @@ Yes, with Pocket Flight and Shizuku on a supported phone. Android does not let o
 ### Can I keep airplane mode off when connected to home Wi-Fi or a Bluetooth device?
 
 Yes. Select your Wi-Fi network names and paired Bluetooth devices in the app. If any selected connection is active, Pocket Flight will not enable airplane mode. You can use this for home Wi-Fi, headphones, a smartwatch or another connected Bluetooth device. If the app cannot verify a configured exception, it blocks entry into airplane mode.
+
+### Can I reduce phone EMF while walking or running with it in my pocket?
+
+Pocket Flight can automate airplane mode during those pocketed stretches, reducing radio-frequency emissions from normal cellular transmissions while airplane mode is active. The app does not measure the reduction or control emissions from other devices. Wi-Fi and Bluetooth may stay on according to your phone's settings; check their switches if you want them off too. Pocket detection and connection exceptions determine whether airplane mode activates.
+
+### Can I use Bluetooth headphones or a running watch?
+
+If you select your headphones or watch as a connection exception, their active connection prevents Pocket Flight from enabling airplane mode. To allow airplane mode while using them, leave that device out of your exception list and use Android's option to keep Bluetooth on in airplane mode. Bluetooth will continue transmitting. Download any music or podcasts before heading out if you plan to listen without mobile data.
 
 ### Does Pocket Flight work with a Samsung Galaxy Fold?
 
