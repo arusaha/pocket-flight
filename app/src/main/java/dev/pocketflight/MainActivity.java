@@ -95,7 +95,8 @@ public class MainActivity extends Activity {
         LinearLayout header = new LinearLayout(this); header.setGravity(Gravity.CENTER_VERTICAL);
         header.setPadding(dp(16), dp(12), dp(16), dp(12)); header.setMinimumHeight(dp(80));
         back = iconButton(R.drawable.ic_back, "Back", this::navigateBack); header.addView(back);
-        pageTitle = text("Pocket Flight", 22, INK, true); pageTitle.setPadding(dp(8), 0, dp(8), 0);
+        pageTitle = text(getString(R.string.app_name), 22, INK, true); pageTitle.setPadding(dp(8), 0, dp(8), 0);
+        pageTitle.setBreakStrategy(android.graphics.text.LineBreaker.BREAK_STRATEGY_BALANCED);
         header.addView(pageTitle, new LinearLayout.LayoutParams(0, -2, 1));
         gear = iconButton(R.drawable.ic_settings, "Settings", () -> showPage(Page.SETTINGS)); header.addView(gear);
         root.addView(header);
@@ -121,7 +122,7 @@ public class MainActivity extends Activity {
         back.setVisibility(next == Page.HOME ? View.GONE : View.VISIBLE);
         back.setContentDescription(next == Page.SETTINGS ? "Back to main screen" : "Back to settings");
         String title = switch (next) {
-            case HOME -> "Pocket Flight"; case SETTINGS -> "Settings"; case SHIZUKU -> "Shizuku";
+            case HOME -> getString(R.string.app_name); case SETTINGS -> "Settings"; case SHIZUKU -> "Shizuku";
             case PERMISSIONS -> "Permissions & battery"; case CONNECTIONS -> "Connection exceptions";
             case DETECTION -> "Pocket detection"; case DIAGNOSTICS -> "Diagnostics"; case ACTIVITY -> "Recent activity";
         };

@@ -1,12 +1,21 @@
-# Pocket Flight: Automatic Airplane Mode for Android
+# Pocket Flight: Auto Airplane
 
 **Pocket it. Disconnect. Unlock. Reconnect.**
 
-Pocket Flight is an Android airplane mode automation app that turns airplane mode on when your phone is locked and detects that it is in your pocket, then turns it off when you unlock. Choose Wi-Fi networks and Bluetooth devices that keep your phone connected, so your home network, headphones or watch can prevent the pocket trigger while connected.
+**Pocket Flight: Auto Airplane** is an automatic airplane mode app for Android that turns airplane mode on when your phone is locked and detects that it is in your pocket, then turns it off when you unlock. Choose Wi-Fi networks and Bluetooth devices that keep your phone connected, so your home network, headphones or watch can prevent the pocket trigger while connected.
 
 Fewer trips to Quick Settings. A simple routine built around putting your phone away and picking it up again. Runs on your phone with **no ads, no account and no analytics**. Works without root using **Shizuku**, which requires setup first.
 
 **[Download the Android APK](https://github.com/arusaha/pocket-flight/releases/latest)** · [Setup guide](#install) · [FAQ](#frequently-asked-questions) · [Report an issue](https://github.com/arusaha/pocket-flight/issues)
+
+## Screenshots
+
+<p>
+  <img src="docs/screenshots/home.png" width="300" alt="Pocket Flight: Auto Airplane main screen with flight artwork, status, Start monitoring button and settings gear">
+  <img src="docs/screenshots/settings.png" width="300" alt="Pocket Flight settings with setup, connection exceptions, pocket detection and diagnostics">
+</p>
+
+Main screen and settings in version 1.2.1. These screenshots are rendered from the Android UI using Robolectric, with automation paused and Shizuku not connected in the test environment.
 
 ## Walk. Run. Give your phone a signal break.
 
@@ -37,7 +46,7 @@ While airplane mode is on, cellular calls and mobile data are interrupted. Wi-Fi
 
 ## Install
 
-1. Download `PocketFlight-1.2.apk` from [Releases](https://github.com/arusaha/pocket-flight/releases/latest) to your phone and open it from Files. Allow that app to install unknown apps when Android asks. If Samsung Auto Blocker prevents installation, review its sideloading setting in Security and privacy.
+1. Download `PocketFlight-1.2.1.apk` from [Releases](https://github.com/arusaha/pocket-flight/releases/latest) to your phone and open it from Files. Allow that app to install unknown apps when Android asks. If Samsung Auto Blocker prevents installation, review its sideloading setting in Security and privacy.
 2. [Install Shizuku](https://shizuku.rikka.app/download/) and follow its [wireless debugging setup](https://shizuku.rikka.app/guide/setup/). Start it, open Pocket Flight, then tap the **settings gear → Shizuku → Connect / grant Shizuku access**. Approve the request in Shizuku. No rooting is needed.
 3. In **Settings → Permissions & battery**, tap **Allow location, Bluetooth & notifications**. For Wi-Fi exceptions, select precise location, then use **App settings** → Permissions → Location → **Allow all the time**. Keep Android's Location switch enabled. Bluetooth selection requires Nearby devices access. Notifications provide the persistent pause control.
 4. In **Settings → Connection exceptions**, select your exact Wi-Fi network name(s) and paired Bluetooth device(s). You can add the currently connected Wi-Fi network or type its name. Either kind of matching connection prevents airplane mode. The app remembers the choices locally.
@@ -46,13 +55,19 @@ While airplane mode is on, cellular calls and mobile data are interrupted. Wi-Fi
 
 After a phone restart, **start Shizuku again**. Pocket Flight attempts to resume monitoring automatically; opening it will also resume it. Android/Samsung can still stop background apps.
 
+## Version 1.2.1: new name, same pocket automation
+
+The app is now named **Pocket Flight: Auto Airplane** in Android's app list, on the main screen and in its monitoring notification. The package, signing key, settings and pocket automation are unchanged. This update also adds the screenshots above to the project page.
+
+To update, use **Stop monitoring** in version 1.2, or **Pause & restore connectivity** in 1.0 or 1.1, then install the 1.2.1 APK over the existing app. Do not uninstall first; installing over it retains your saved settings. Open the app after updating.
+
 ## Version 1.2: a simpler main screen
 
 The main screen shows your current status, a flight animation, a **Start monitoring / Stop monitoring** button and a settings gear. While monitoring, the dot circles continuously and the normal subtext reads **“Waiting for your phone to be locked and pocketed”**. Starting lifts the plane; stopping settles it back. Setup problems and restoration warnings remain visible when they need attention.
 
 The gear opens settings for Shizuku, permissions and battery, connection exceptions, pocket detection, diagnostics and recent activity. The back arrow and Android Back return through settings to the main screen. Animation runs only on the visible main screen and respects Android's system animation setting. The orbit indicates that monitoring is enabled; it does not mean airplane mode is already on.
 
-To update from 1.0 or 1.1, first use **Pause & restore connectivity** in the old app, then install the 1.2 APK over it. The package and signing key are unchanged, so your saved settings are retained. Do not uninstall first. Open the app after updating. **Stop monitoring** in 1.2 performs the same pause-and-restore action; the notification still provides **Pause & restore**.
+**Stop monitoring** performs the same pause-and-restore action as in earlier versions; the notification still provides **Pause & restore**.
 
 ## Pocket detection on foldable phones: what's new in 1.1
 

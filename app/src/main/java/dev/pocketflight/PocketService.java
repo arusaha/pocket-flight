@@ -342,7 +342,7 @@ public class PocketService extends Service implements SensorEventListener {
         PendingIntent open = PendingIntent.getActivity(this, 0, new Intent(this, MainActivity.class), PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         PendingIntent pause = PendingIntent.getService(this, 1, new Intent(this, PocketService.class).setAction(PAUSE), PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         return new Notification.Builder(this, CHANNEL).setSmallIcon(R.drawable.ic_flight)
-                .setContentTitle("Pocket Flight").setContentText(text).setStyle(new Notification.BigTextStyle().bigText(text))
+                .setContentTitle(getString(R.string.app_name)).setContentText(text).setStyle(new Notification.BigTextStyle().bigText(text))
                 .setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true)
                 .addAction(new Notification.Action.Builder(null, "Pause & restore", pause).build()).build();
     }
