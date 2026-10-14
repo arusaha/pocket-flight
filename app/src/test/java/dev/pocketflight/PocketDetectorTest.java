@@ -73,6 +73,36 @@ public class PocketDetectorTest {
         PocketDetector d = detector(); d.light(15); d.orientation(0, 9.8f, 0, 0);
         assertFalse(d.candidate(0, true, 10)); assertTrue(d.candidate(0, true, 20));
     }
+    @Test public void outsideNeedsValidFarProximityWhenAvailable() {
+        PocketDetector d = new PocketDetector();
+        assertFalse(d.outside(0, true, false, 10));
+        d.proximity(-1, 5); assertFalse(d.outside(0, true, false, 10));
+        d.proximity(5, 0); assertFalse(d.outside(0, true, false, 10));
+        d.proximity(0, 5); assertFalse(d.outside(0, true, false, 10));
+        d.proximity(5, 5); assertTrue(d.outside(0, true, false, 10));
+        assertTrue(d.outside(120000, true, false, 10)); // On-change readings remain valid.
+        assertFalse(d.outside(120000, false, false, 10));
+    }
+    @Test public void stalePocketAssistIsNotEvidenceOfLeavingPocket() {
+        PocketDetector d = detector(); d.light(0); d.orientation(0, 9.8f, 0, 0);
+        assertFalse(d.outside(0, true, true, 10));
+        assertFalse(d.candidate(3000, true, 10));
+        assertFalse(d.outside(3000, true, true, 10));
+        d.reset(); assertFalse(d.outside(3000, true, true, 10));
+    }
+    @Test public void clearProximityPlusLightOrFreshFlatnessConfirmsExit() {
+        PocketDetector d = detector(); d.light(20);
+        assertTrue(d.outside(0, true, true, 10));
+        d.proximity(0, 5); assertFalse(d.outside(0, true, true, 10));
+        d.proximity(5, 5); d.light(0); d.orientation(0, 0, 9.8f, 0);
+        assertTrue(d.outside(0, true, true, 10));
+        assertFalse(d.outside(2501, true, true, 10));
+    }
+    @Test public void assistOnlyPhonesCanConfirmExitWithoutProximity() {
+        PocketDetector d = new PocketDetector(); d.light(20);
+        assertTrue(d.outside(0, false, true, 10));
+        assertFalse(d.outside(0, true, true, 10)); // A registered but unread proximity sensor is unknown.
+    }
     @Test public void fallbackStillNeedsScreenOffAndLockAndClearExceptions() {
         PocketDetector d = detector(); d.light(0); d.orientation(0, 9.8f, 0, 0); d.candidate(0, true, 10);
         d.orientation(0, 9.8f, 0, 5000); boolean candidate = d.candidate(5000, true, 10);

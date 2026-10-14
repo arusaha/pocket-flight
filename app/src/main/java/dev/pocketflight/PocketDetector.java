@@ -24,6 +24,16 @@ public final class PocketDetector {
         return Float.isFinite(proximity) && proximity >= 0 && Float.isFinite(range) && range > 0
                 && proximity < Math.min(range, 5f);
     }
+    public boolean outside(long now, boolean proximityAvailable, boolean assist, float darkLux) {
+        // Absence of a pocket candidate is not enough: missing/stale readings are UNKNOWN.
+        if (proximityAvailable && (!Float.isFinite(proximity) || proximity < 0
+                || !Float.isFinite(range) || range <= 0 || near())) return false;
+        if (!assist) return proximityAvailable;
+        boolean bright = Float.isFinite(lux) && lux > darkLux;
+        boolean flat = Float.isFinite(verticalZ) && verticalZ >= 0.82f
+                && orientationAt >= 0 && now >= orientationAt && now - orientationAt <= 2500;
+        return bright || flat;
+    }
     public boolean candidate(long now, boolean assist, float darkLux) {
         boolean dark = Float.isFinite(lux) && lux >= 0 && lux <= darkLux;
         boolean tilted = Float.isFinite(verticalZ) && verticalZ < 0.82f

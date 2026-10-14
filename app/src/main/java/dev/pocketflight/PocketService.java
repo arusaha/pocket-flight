@@ -26,6 +26,7 @@ public class PocketService extends Service implements SensorEventListener {
     private Sensor proximity, light, orientation;
     private boolean lightRegistered, orientationRegistered;
     private final PocketDetector detector = new PocketDetector();
+    private final PocketExitTimer exitTimer = new PocketExitTimer();
     private final PocketReport report = new PocketReport();
     private PowerManager power;
     private KeyguardManager keyguard;
@@ -41,10 +42,12 @@ public class PocketService extends Service implements SensorEventListener {
     };
     private final SharedPreferences.OnSharedPreferenceChangeListener preferences = (p, key) -> {
         if ("enabled".equals(key) || "wifi".equals(key) || "bluetooth".equals(key) || "delay_seconds".equals(key)
-                || "pocket_assist".equals(key) || "dark_lux".equals(key)) {
+                || "pocket_assist".equals(key) || "dark_lux".equals(key)
+                || "restore_on_exit".equals(key) || "exit_minutes".equals(key)) {
             generation++;
             retryAt = 0;
             detector.resetTimer();
+            exitTimer.reset();
             if ("pocket_assist".equals(key)) configureSensors();
             evaluate();
         }
@@ -121,7 +124,13 @@ public class PocketService extends Service implements SensorEventListener {
         boolean nonWake = sensorRegistered && !proximity.isWakeUpSensor();
         boolean assistNonWake = prefs.pocketAssist() && lightRegistered && orientationRegistered
                 && (!light.isWakeUpSensor() || !orientation.isWakeUpSensor());
-        boolean needed = (nonWake || assistNonWake) && prefs.enabled() && !power.isInteractive() && !airplane;
+        boolean watchExit = airplane && prefs.owned() && prefs.restoreOnExit();
+        boolean countingExit = watchExit && exitTimer.running()
+                && !exitTimer.due(SystemClock.elapsedRealtime(), prefs.exitMillis());
+        // Non-wake sensors must keep delivering while offline too. Wake-up sensors only
+        // need a CPU lock during the exit countdown so the deadline runs with the screen off.
+        boolean needed = prefs.enabled() && !power.isInteractive()
+                && (((nonWake || assistNonWake) && (!airplane || watchExit)) || countingExit);
         if (needed) fallbackWake.acquire(600000);
         else if (fallbackWake.isHeld()) fallbackWake.release();
     }
@@ -133,7 +142,7 @@ public class PocketService extends Service implements SensorEventListener {
     private void configureSensors() {
         sensors.unregisterListener(this);
         sensorEpoch = SystemClock.elapsedRealtime();
-        detector.reset(); covered = false; generation++;
+        detector.reset(); exitTimer.reset(); covered = false; generation++;
         proximity = preferredSensor(Sensor.TYPE_PROXIMITY);
         sensorRegistered = proximity != null && sensors.registerListener(this, proximity, SensorManager.SENSOR_DELAY_NORMAL);
         lightRegistered = orientationRegistered = false;
@@ -160,7 +169,8 @@ public class PocketService extends Service implements SensorEventListener {
     private void recordSession(long now, boolean locked, boolean screenOff) {
         if (!report.active()) return;
         boolean finished = !locked && !screenOff;
-        String flags = "locked=" + locked + ", screenOff=" + screenOff + ", candidate=" + covered;
+        String flags = "locked=" + locked + ", screenOff=" + screenOff + ", candidate=" + covered
+                + ", exitCountdown=" + exitTimer.running();
         if (report.sample(now, detector.readings(), flags + " · " + reportStatus(status), finished))
             prefs.data.edit().putString("pocket_report", report.text()).apply();
         if (finished) {
@@ -189,9 +199,22 @@ public class PocketService extends Service implements SensorEventListener {
         else return;
         covered = detector.candidate(now, prefs.pocketAssist() && lightRegistered && orientationRegistered, prefs.darkLux());
         if (covered != previous) { generation++; if (covered && !power.isInteractive()) wakeBriefly(); }
-        if (event.sensor != orientation || covered != previous || now - lastEvaluationAt >= 1000) evaluate();
+        boolean exitChanged = updateExitTimer(now, airplane(this), keyguard.isDeviceLocked());
+        if (event.sensor != orientation || covered != previous || exitChanged || now - lastEvaluationAt >= 1000) evaluate();
     }
     @Override public void onAccuracyChanged(Sensor s, int accuracy) {}
+
+    private boolean updateExitTimer(long now, boolean airplane, boolean locked) {
+        long previous = exitTimer.startedAt();
+        boolean assist = prefs.pocketAssist();
+        boolean usable = (!assist || (lightRegistered && orientationRegistered))
+                && (sensorRegistered || assist);
+        boolean armed = prefs.enabled() && prefs.owned() && airplane && locked && prefs.restoreOnExit();
+        exitTimer.observe(now, armed, usable && detector.outside(now, sensorRegistered, assist, prefs.darkLux()));
+        boolean changed = previous != exitTimer.startedAt();
+        if (changed) generation++; // Also invalidates an exit restore queued before re-pocketing.
+        return changed;
+    }
 
     private void evaluate() {
         if (destroyed || prefs == null || bridge == null) return;
@@ -203,6 +226,7 @@ public class PocketService extends Service implements SensorEventListener {
         boolean previous = covered;
         covered = detector.candidate(now, prefs.pocketAssist() && lightRegistered && orientationRegistered, prefs.darkLux());
         if (previous != covered) generation++;
+        updateExitTimer(now, airplane, locked);
         prefs.data.edit().putString("sensor", detector.reason() + "\n" + detector.readings()).apply();
         recordSession(now, locked, screenOff);
         manageWake(airplane);
@@ -230,11 +254,23 @@ public class PocketService extends Service implements SensorEventListener {
             else publish("Restore pending — start Shizuku, or turn off airplane mode in Quick Settings");
             return;
         }
+        if (exitTimer.due(now, prefs.exitMillis())) {
+            if (bridge.ready() && now >= retryAt) changeMode(false, true);
+            else publish("Restore pending — start Shizuku, or turn off airplane mode in Quick Settings");
+            return;
+        }
         if (!sensorRegistered && !(prefs.pocketAssist() && lightRegistered && orientationRegistered)) {
             publish("No usable pocket sensors — automation paused"); return;
         }
         if (!bridge.ready()) { releaseBriefWake(); publish("Waiting for Shizuku — open it, start it and grant access"); return; }
-        if (airplane) { releaseBriefWake(); publish(prefs.owned() ? "Pocket detected · airplane mode on" : "Manual airplane mode · left unchanged"); return; }
+        if (airplane) {
+            releaseBriefWake();
+            if (exitTimer.running()) {
+                long seconds = (exitTimer.remaining(now, prefs.exitMillis()) + 999) / 1000;
+                publish(String.format(java.util.Locale.US, "Out of pocket · restoring in %d:%02d", seconds / 60, seconds % 60));
+            } else publish(prefs.owned() ? "Pocket detected · airplane mode on" : "Manual airplane mode · left unchanged");
+            return;
+        }
         if (!locked || !screenOff) { publish("Ready · lock your phone and put it in your pocket"); return; }
         if (suppressed) { publish("Manual override · waiting for your next unlock"); return; }
         if (callActive()) { releaseBriefWake(); publish("Call in progress · staying online"); return; }
@@ -305,7 +341,11 @@ public class PocketService extends Service implements SensorEventListener {
     }
 
     private void changeMode(boolean enabled) {
+        changeMode(enabled, false);
+    }
+    private void changeMode(boolean enabled, boolean afterExit) {
         if (enabled && !prefs.owned(true)) { publish("Could not save recovery state · staying online"); return; }
+        if (enabled) exitTimer.reset();
         busy = true;
         wakeBriefly();
         publish(enabled ? "Turning airplane mode on…" : "Restoring connectivity…");
@@ -316,6 +356,8 @@ public class PocketService extends Service implements SensorEventListener {
             try {
                 // Unlock or pause can happen between the main-thread decision and dispatch.
                 if (enabled && (destroyed || token != generation || !prefs.enabled() || !keyguard.isDeviceLocked() || power.isInteractive() || callActive())) result = "Cancelled";
+                else if (afterExit && prefs.enabled() && keyguard.isDeviceLocked()
+                        && (destroyed || token != generation || !prefs.restoreOnExit())) result = "Cancelled";
                 else result = remote == null ? "Shizuku disconnected" : remote.setAirplaneMode(enabled);
             } catch (Exception e) { result = "Shizuku connection lost"; }
             String outcome = result;
@@ -324,8 +366,11 @@ public class PocketService extends Service implements SensorEventListener {
                 if (destroyed) return; // Durable ownership journal is retained for recovery.
                 boolean actual = airplane(this);
                 if (!actual) prefs.owned(false);
+                if (afterExit && "Cancelled".equals(outcome)) { retryAt = 0; evaluate(); return; }
                 if ("OK".equals(outcome) && actual == enabled) {
-                    prefs.event(enabled ? "Pocket detected → airplane mode on" : "Connectivity restored → airplane mode off");
+                    if (!enabled) { exitTimer.reset(); detector.resetTimer(); }
+                    prefs.event(enabled ? "Pocket detected → airplane mode on" : afterExit
+                            ? "Out of pocket → airplane mode off" : "Connectivity restored → airplane mode off");
                     retryAt = 0;
                     evaluate(); // Compensates for an unlock that raced with the enable command.
                 } else {

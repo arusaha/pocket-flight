@@ -215,6 +215,23 @@ public class MainActivity extends Activity {
         exceptions.addView(text("If a selected exception cannot be checked, the app stays online.", 13, MUTED, false));
     }
     private void buildDetection() {
+        LinearLayout restoration = card("After leaving your pocket", "Restore connectivity while the phone is still locked. Unlocking still restores immediately.");
+        Switch exit = new Switch(this);
+        exit.setText("Restore after\nleaving pocket"); exit.setTextSize(15); exit.setTextColor(INK);
+        exit.setMinHeight(dp(56)); exit.setChecked(prefs.restoreOnExit()); restoration.addView(exit);
+        TextView exitLabel = text("Restore after: " + prefs.exitMinutes() + (prefs.exitMinutes() == 1 ? " minute" : " minutes"), 14, INK, true); restoration.addView(exitLabel);
+        SeekBar exitDelay = new SeekBar(this); exitDelay.setMax(29); exitDelay.setProgress(prefs.exitMinutes() - 1);
+        exitDelay.setContentDescription("Out-of-pocket restore delay, 1 to 30 minutes");
+        exitDelay.setEnabled(prefs.restoreOnExit()); restoration.addView(exitDelay);
+        exit.setOnCheckedChangeListener((button, enabled) -> {
+            prefs.data.edit().putBoolean("restore_on_exit", enabled).apply(); exitDelay.setEnabled(enabled);
+        });
+        exitDelay.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar bar, int p, boolean user) { exitLabel.setText("Restore after: " + (p + 1) + (p == 0 ? " minute" : " minutes")); }
+            @Override public void onStartTrackingTouch(SeekBar bar) {}
+            @Override public void onStopTrackingTouch(SeekBar bar) { prefs.data.edit().putInt("exit_minutes", bar.getProgress() + 1).apply(); }
+        });
+        restoration.addView(text("Defaults to 2 minutes. Returning to the pocket or losing usable readings resets the countdown. Only airplane mode enabled by this app is restored. Watching for pocket exit can use extra battery while offline.", 13, MUTED, false));
         LinearLayout detection = card(null, "Try Pocket assist if proximity alone misses the folded phone in your pocket.");
         Switch assist = new Switch(this);
         assist.setText("Pocket assist\nDarkness + tilt"); assist.setTextSize(15); assist.setTextColor(INK);
@@ -271,7 +288,8 @@ public class MainActivity extends Activity {
             artwork.setMonitoring(prefs.enabled(), resumed);
         }
         if (access != null) access.setText(ready ? "✓ Shizuku connected" : ShizukuBridge.authorized() ? "Starting connection…" : "Setup needed · Shizuku access");
-        if (detectionSummary != null) detectionSummary.setText("Pocket assist " + (prefs.pocketAssist() ? "on" : "off") + " · " + prefs.delayMillis() / 1000 + " second delay");
+        if (detectionSummary != null) detectionSummary.setText("Pocket assist " + (prefs.pocketAssist() ? "on" : "off")
+                + " · " + (prefs.restoreOnExit() ? "restore after " + prefs.exitMinutes() + " min out" : "restore on unlock"));
         Set<String> wifi = prefs.wifi();
         if (wifiSummary != null) wifiSummary.setText(wifi.isEmpty() ? "No Wi-Fi exceptions selected" : String.join("\n", new TreeSet<>(wifi)));
         Set<String> bt = prefs.bluetooth();

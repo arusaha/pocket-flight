@@ -40,7 +40,7 @@ public class FlightPolicyTest {
     @Test public void manualAirplaneModeSurvivesUnlock() {
         assertEquals(Action.WAIT, decide(new State(true,false,false,false,0,5000,true,false,true,false,ExceptionState.CLEAR)));
     }
-    @Test public void takingOutOfPocketWhileLockedWaitsForUnlock() {
+    @Test public void entryPolicyDoesNotRestoreFromClearProximityAlone() {
         assertEquals(Action.WAIT, decide(new State(true,true,true,false,0,5000,true,true,true,false,ExceptionState.CLEAR)));
     }
     @Test public void manualOffSuppressesReentryUntilUnlock() {

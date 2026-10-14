@@ -93,9 +93,9 @@ public class MainActivityTest {
     }
     @Test public void detectionPreferencesSurviveNavigationAndRecreation() {
         tap("Settings"); tap("Pocket detection");
-        Switch assist = (Switch) views().stream().filter(v -> v instanceof Switch).findFirst().orElseThrow(); assist.setChecked(true);
+        Switch assist = (Switch) labelled("Pocket assist\nDarkness + tilt"); assist.setChecked(true);
         activity.onBackPressed(); tap("Pocket detection");
-        assertTrue(((Switch) views().stream().filter(v -> v instanceof Switch).findFirst().orElseThrow()).isChecked());
+        assertTrue(((Switch) labelled("Pocket assist\nDarkness + tilt")).isChecked());
         assertTrue(((SeekBar) labelled("Maximum light level for Pocket assist, 1 to 50 lux")).isEnabled());
         controller.recreate(); activity = controller.get();
         labelled("Pocket assist\nDarkness + tilt"); labelled("Back to settings");
@@ -104,6 +104,25 @@ public class MainActivityTest {
         AppPrefs prefs = new AppPrefs(activity); prefs.enabled(true); prefs.owned(true);
         tap("Start monitoring");
         assertFalse(prefs.enabled()); assertTrue(prefs.owned()); labelled("Retry restoring connectivity");
+    }
+    @Test public void pocketExitDefaultsAndConfigurationSurviveRecreation() {
+        AppPrefs prefs = new AppPrefs(activity);
+        assertTrue(prefs.restoreOnExit()); assertEquals(120000, prefs.exitMillis());
+        tap("Settings"); tap("Pocket detection");
+        SeekBar delay = (SeekBar) labelled("Out-of-pocket restore delay, 1 to 30 minutes");
+        assertEquals(1, delay.getProgress()); assertTrue(delay.isEnabled());
+        delay.setProgress(4);
+        // A user finishes a slider gesture; preserve the chosen value across a new activity.
+        android.widget.SeekBar.OnSeekBarChangeListener listener = org.robolectric.util.ReflectionHelpers.getField(delay, "mOnSeekBarChangeListener");
+        listener.onStopTrackingTouch(delay);
+        assertEquals(300000, prefs.exitMillis());
+        ((Switch) labelled("Restore after\nleaving pocket")).setChecked(false);
+        assertFalse(delay.isEnabled()); assertFalse(prefs.restoreOnExit());
+        controller.recreate(); activity = controller.get();
+        assertFalse(((Switch) labelled("Restore after\nleaving pocket")).isChecked());
+        assertEquals(4, ((SeekBar) labelled("Out-of-pocket restore delay, 1 to 30 minutes")).getProgress());
+        prefs.data.edit().putInt("exit_minutes", 0).commit(); assertEquals(1, prefs.exitMinutes());
+        prefs.data.edit().putInt("exit_minutes", 99).commit(); assertEquals(30, prefs.exitMinutes());
     }
     @Test @Config(sdk = 30) public void android11CanOpenSettingsAndNavigateBack() {
         tap("Settings"); tap("Diagnostics"); labelled("Last pocket report");

@@ -6,6 +6,8 @@ public record HomeStatus(String title, String detail, String button) {
         String current = serviceStatus == null ? "" : serviceStatus;
         String button = enabled ? "Stop monitoring" : owned ? "Retry restoring connectivity" : "Start monitoring";
         if (owned && !ready) return new HomeStatus("Restore needed", "Start Shizuku, or turn off airplane mode in Quick Settings", button);
+        if (enabled && owned && current.startsWith("Out of pocket · restoring in "))
+            return new HomeStatus("Out of pocket", "Restoring connectivity in " + current.substring("Out of pocket · restoring in ".length()), button);
         if (owned) return new HomeStatus("Restoring connectivity", "Turning off airplane mode enabled by Pocket Flight", button);
         if (!enabled) return new HomeStatus("Paused", "Automation is off", button);
         if (!ready) return new HomeStatus(authorized ? "Connecting" : "Setup needed",

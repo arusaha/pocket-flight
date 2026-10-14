@@ -36,4 +36,9 @@ public class HomeStatusTest {
     @Test public void manualAirplaneModeIsDescribedAccurately() {
         assertEquals("Manual airplane mode", HomeStatus.from(true, false, true, true, "Manual airplane mode · left unchanged").title());
     }
+    @Test public void exitCountdownIsVisibleWithoutClaimingRestorationHasStarted() {
+        assertEquals(new HomeStatus("Out of pocket", "Restoring connectivity in 1:42", "Stop monitoring"),
+                HomeStatus.from(true, true, true, true, "Out of pocket · restoring in 1:42"));
+        assertEquals("Restore needed", HomeStatus.from(true, true, false, false, "Out of pocket · restoring in 1:42").title());
+    }
 }
