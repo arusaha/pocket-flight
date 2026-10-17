@@ -20,6 +20,14 @@ public class PocketService extends Service implements SensorEventListener {
     private static final String CHANNEL = "pocket_monitor";
     private static final int NOTIFICATION = 1;
     private static final long CONNECTION_RECHECK_MS = 60000;
+    private static final String HYBRID_CHECK = "dev.pocketflight.HYBRID_CHECK";
+    private static final long HYBRID_WINDOW_MS = 5000, HYBRID_REST_MS = 60000;
+    private enum HybridPhase { OFF, CHECKING, RESTING, CONFIRMING }
+    private HybridPhase hybridPhase = HybridPhase.OFF;
+    private long hybridWindowUntil, hybridNextCheck;
+    private boolean hybridAlarmFailed;
+    private AlarmManager alarms;
+    private PendingIntent hybridAlarm;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private AppPrefs prefs;
@@ -44,14 +52,24 @@ public class PocketService extends Service implements SensorEventListener {
     private volatile int generation;
     private String status = "Starting…";
     private final Runnable tick = this::evaluate;
+    private final Runnable hybridWindowEnd = this::evaluate;
+    private final BroadcastReceiver hybridChecks = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) {
+            // A stale alarm cannot start an early check or disturb a confirmation.
+            if (HYBRID_CHECK.equals(intent.getAction()) && hybridPhase == HybridPhase.RESTING
+                    && SystemClock.elapsedRealtime() >= hybridNextCheck) evaluate();
+        }
+    };
     private final SharedPreferences.OnSharedPreferenceChangeListener preferences = (p, key) -> {
         if ("enabled".equals(key) || "wifi".equals(key) || "bluetooth".equals(key) || "delay_seconds".equals(key)
                 || "pocket_assist".equals(key) || "dark_lux".equals(key)
-                || "restore_on_exit".equals(key) || "exit_minutes".equals(key)) {
+                || "restore_on_exit".equals(key) || "exit_minutes".equals(key) || "hybrid_exit".equals(key)) {
             generation++;
             retryAt = 0;
             detector.resetTimer();
             exitTimer.reset();
+            resetHybrid();
+            if ("hybrid_exit".equals(key)) hybridAlarmFailed = false;
             if ("pocket_assist".equals(key)) sensorsNeedRefresh = true;
             if ("bluetooth".equals(key)) invalidateBluetooth();
             evaluate();
@@ -101,6 +119,13 @@ public class PocketService extends Service implements SensorEventListener {
         if (Build.VERSION.SDK_INT >= 34) startForeground(NOTIFICATION, notification(status), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
         else startForeground(NOTIFICATION, notification(status));
         sensors = getSystemService(SensorManager.class);
+        alarms = getSystemService(AlarmManager.class);
+        hybridAlarm = PendingIntent.getBroadcast(this, 2, new Intent(HYBRID_CHECK).setPackage(getPackageName()),
+                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+        // The signature permission also protects Android 11/12, where the newer
+        // NOT_EXPORTED flag is not enforced. The five-argument API exists since 26.
+        registerReceiver(hybridChecks, new IntentFilter(HYBRID_CHECK), getPackageName() + ".permission.INTERNAL_CHECK",
+                null, Context.RECEIVER_NOT_EXPORTED);
         IntentFilter filter = new IntentFilter();
         for (String action : new String[]{Intent.ACTION_SCREEN_OFF, Intent.ACTION_SCREEN_ON, Intent.ACTION_USER_PRESENT,
                 Intent.ACTION_AIRPLANE_MODE_CHANGED, BluetoothDevice.ACTION_ACL_CONNECTED, BluetoothDevice.ACTION_ACL_DISCONNECTED,
@@ -135,11 +160,13 @@ public class PocketService extends Service implements SensorEventListener {
         boolean watchExit = airplane && prefs.owned() && prefs.restoreOnExit();
         boolean countingExit = watchExit && exitTimer.running()
                 && !exitTimer.due(SystemClock.elapsedRealtime(), prefs.exitMillis());
+        boolean sampling = hybridPhase == HybridPhase.CHECKING;
         // Non-wake sensors must keep delivering while offline too. Wake-up sensors only
         // need a CPU lock during the exit countdown so the deadline runs with the screen off.
-        boolean needed = prefs.enabled() && !power.isInteractive()
-                && (((nonWake || assistNonWake) && (!airplane || watchExit)) || countingExit);
-        if (needed) fallbackWake.acquire(600000);
+        boolean needed = sensorsActive && prefs.enabled() && !power.isInteractive()
+                && (((nonWake || assistNonWake) && (!airplane || watchExit)) || countingExit || sampling);
+        if (needed) fallbackWake.acquire(sampling
+                ? Math.max(1, hybridWindowUntil - SystemClock.elapsedRealtime()) + 1000 : 600000);
         else if (fallbackWake.isHeld()) fallbackWake.release();
     }
 
@@ -187,6 +214,53 @@ public class PocketService extends Service implements SensorEventListener {
             report.begin(SystemClock.elapsedRealtime(), sensorInventory());
             wakeBriefly();
         }
+    }
+
+    private void resetHybrid() {
+        hybridPhase = HybridPhase.OFF;
+        hybridWindowUntil = hybridNextCheck = 0;
+        main.removeCallbacks(hybridWindowEnd);
+        if (alarms != null && hybridAlarm != null) alarms.cancel(hybridAlarm);
+    }
+    private void beginHybridCheck(long now) {
+        hybridPhase = HybridPhase.CHECKING;
+        hybridWindowUntil = now + HYBRID_WINDOW_MS;
+        hybridNextCheck = 0;
+        alarms.cancel(hybridAlarm);
+        // Never reuse proximity/light readings collected before the sleeping interval.
+        sensorsNeedRefresh = true;
+        main.removeCallbacks(hybridWindowEnd);
+        main.postDelayed(hybridWindowEnd, HYBRID_WINDOW_MS);
+    }
+    private void restHybrid(long now) {
+        hybridPhase = HybridPhase.RESTING;
+        hybridNextCheck = now + HYBRID_REST_MS;
+        main.removeCallbacks(hybridWindowEnd);
+        suspendSensors();
+        try {
+            // Inexact and allowed during idle: Android may delay delivery substantially.
+            // The live service also checks the deadline on its non-waking fallback tick.
+            alarms.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, hybridNextCheck, hybridAlarm);
+        } catch (RuntimeException e) {
+            hybridAlarmFailed = true;
+            resetHybrid();
+            prefs.event("Hybrid scheduling unavailable · using continuous exit sensing");
+            resumeSensors();
+        }
+    }
+    private void prepareHybrid(long now, boolean eligible) {
+        if (!eligible) {
+            if (hybridPhase != HybridPhase.OFF) resetHybrid();
+        } else if (hybridPhase == HybridPhase.OFF
+                || (hybridPhase == HybridPhase.RESTING && now >= hybridNextCheck)) beginHybridCheck(now);
+    }
+    private void finishHybrid(long now) {
+        if (hybridPhase == HybridPhase.CHECKING && exitTimer.running()) {
+            hybridPhase = HybridPhase.CONFIRMING;
+            main.removeCallbacks(hybridWindowEnd);
+            prefs.event("Hybrid detected pocket exit · continuous confirmation started");
+        } else if ((hybridPhase == HybridPhase.CHECKING && now >= hybridWindowUntil)
+                || (hybridPhase == HybridPhase.CONFIRMING && !exitTimer.running())) restHybrid(now);
     }
 
     private void invalidateBluetooth() {
@@ -291,10 +365,12 @@ public class PocketService extends Service implements SensorEventListener {
         try { evaluateState(); }
         finally {
             main.removeCallbacks(tick);
-            // Handler delays do not wake a sleeping CPU. Standby has no sensor loop,
-            // wake lock, wake-up alarm or Bluetooth scan; broadcasts resume it promptly.
+            // Handler delays do not wake a sleeping CPU. Connection standby has no
+            // wake-up alarm; hybrid rest has its own single inexact alarm.
             if (!destroyed && (prefs.enabled() || prefs.owned())) main.postDelayed(tick,
-                    sensorsActive || busy || prefs.owned() ? 2000 : CONNECTION_RECHECK_MS);
+                    hybridPhase == HybridPhase.RESTING
+                            ? Math.max(1, Math.min(CONNECTION_RECHECK_MS, hybridNextCheck - SystemClock.elapsedRealtime()))
+                            : sensorsActive || busy || prefs.owned() ? 2000 : CONNECTION_RECHECK_MS);
         }
     }
     private void evaluateState() {
@@ -314,16 +390,24 @@ public class PocketService extends Service implements SensorEventListener {
                 : wifi.state() == UNKNOWN || bluetooth == UNKNOWN ? UNKNOWN : CLEAR;
         boolean watchExit = prefs.owned() && airplane;
         if (!prefs.enabled() || connection == CONNECTED || (connection == UNKNOWN && !watchExit)) {
+            resetHybrid();
             suspendSensors();
             prefs.data.edit().putString("sensor", "Pocket sensors paused while checking or connected to an exception").apply();
         } else {
-            resumeSensors();
-            boolean previous = covered;
-            covered = detector.candidate(now, prefs.pocketAssist() && lightRegistered && orientationRegistered, prefs.darkLux());
-            if (previous != covered) generation++;
-            updateExitTimer(now, airplane, locked);
-            prefs.data.edit().putString("sensor", detector.reason() + "\n" + detector.readings()).apply();
-            recordSession(now, locked, screenOff);
+            prepareHybrid(now, prefs.hybridExit() && !hybridAlarmFailed && prefs.restoreOnExit()
+                    && watchExit && locked && !recovering);
+            if (hybridPhase != HybridPhase.RESTING) {
+                resumeSensors();
+                boolean previous = covered;
+                covered = detector.candidate(now, prefs.pocketAssist() && lightRegistered && orientationRegistered, prefs.darkLux());
+                if (previous != covered) generation++;
+                updateExitTimer(now, airplane, locked);
+                prefs.data.edit().putString("sensor", detector.reason() + "\n" + detector.readings()).apply();
+                recordSession(now, locked, screenOff);
+                finishHybrid(now);
+            }
+            if (hybridPhase == HybridPhase.RESTING)
+                prefs.data.edit().putString("sensor", "Hybrid rest · sensors off until the next check; Android may delay it").apply();
             manageWake(airplane);
         }
         if (busy) return;
@@ -365,6 +449,12 @@ public class PocketService extends Service implements SensorEventListener {
             else publish("Restore pending — start Shizuku, or turn off airplane mode in Quick Settings");
             return;
         }
+        if (hybridPhase == HybridPhase.RESTING) {
+            releaseBriefWake();
+            publish(bridge.ready() ? "Hybrid rest · airplane mode on · waiting for next pocket check"
+                    : "Restore pending — start Shizuku, or turn off airplane mode in Quick Settings");
+            return;
+        }
         if (!sensorRegistered && !(prefs.pocketAssist() && lightRegistered && orientationRegistered)) {
             publish("No usable pocket sensors — automation paused"); return;
         }
@@ -374,7 +464,9 @@ public class PocketService extends Service implements SensorEventListener {
             if (exitTimer.running()) {
                 long seconds = (exitTimer.remaining(now, prefs.exitMillis()) + 999) / 1000;
                 publish(String.format(java.util.Locale.US, "Out of pocket · restoring in %d:%02d", seconds / 60, seconds % 60));
-            } else publish(prefs.owned() ? "Pocket detected · airplane mode on" : "Manual airplane mode · left unchanged");
+            } else if (hybridPhase == HybridPhase.CHECKING) publish("Hybrid check · airplane mode on · checking for pocket exit");
+            else if (hybridAlarmFailed && prefs.hybridExit() && prefs.restoreOnExit()) publish("Hybrid unavailable · continuous exit sensing");
+            else publish(prefs.owned() ? "Pocket detected · airplane mode on" : "Manual airplane mode · left unchanged");
             return;
         }
         if (!locked || !screenOff) { publish("Ready · lock your phone and put it in your pocket"); return; }
@@ -508,9 +600,11 @@ public class PocketService extends Service implements SensorEventListener {
     @Override public IBinder onBind(Intent intent) { return null; }
     @Override public void onDestroy() {
         destroyed = true;
+        resetHybrid();
         main.removeCallbacksAndMessages(null);
         if (sensors != null) sensors.unregisterListener(this);
         try { unregisterReceiver(events); } catch (RuntimeException ignored) { }
+        try { unregisterReceiver(hybridChecks); } catch (RuntimeException ignored) { }
         try { if (connectivity != null) connectivity.unregisterNetworkCallback(networks); } catch (RuntimeException ignored) { }
         if (prefs != null) {
             if (report.active()) {

@@ -56,4 +56,11 @@ public class HomeStatusTest {
                 HomeStatus.from(true, true, true, true, "Out of pocket · restoring in 1:42"));
         assertEquals("Restore needed", HomeStatus.from(true, true, false, false, "Out of pocket · restoring in 1:42").title());
     }
+    @Test public void hybridRestAndChecksKeepAirplaneStateAndRecoveryVisible() {
+        assertEquals("Battery saver", HomeStatus.from(true, true, true, true, "Hybrid rest · airplane mode on").title());
+        assertEquals("Checking pocket", HomeStatus.from(true, true, true, true, "Hybrid check · airplane mode on").title());
+        assertEquals("Airplane mode on", HomeStatus.from(true, true, true, true, "Hybrid unavailable · continuous exit sensing").title());
+        assertEquals("Restore needed", HomeStatus.from(true, true, false, false, "Hybrid rest · airplane mode on").title());
+        assertEquals("Restoring connectivity", HomeStatus.from(false, true, true, true, "Hybrid rest · airplane mode on").title());
+    }
 }

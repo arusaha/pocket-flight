@@ -18,6 +18,7 @@ public final class AppPrefs {
     public long delayMillis() { return data.getInt("delay_seconds", 5) * 1000L; }
     public boolean pocketAssist() { return data.getBoolean("pocket_assist", false); }
     public boolean restoreOnExit() { return data.getBoolean("restore_on_exit", true); }
+    public boolean hybridExit() { return data.getBoolean("hybrid_exit", true); }
     public int exitMinutes() { return Math.max(1, Math.min(30, data.getInt("exit_minutes", 2))); }
     public long exitMillis() { return exitMinutes() * 60000L; }
     public float darkLux() { return Math.max(1, Math.min(50, data.getInt("dark_lux", 10))); }

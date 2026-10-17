@@ -108,9 +108,12 @@ public class MainActivityTest {
     }
     @Test public void pocketExitDefaultsAndConfigurationSurviveRecreation() {
         AppPrefs prefs = new AppPrefs(activity);
-        assertTrue(prefs.restoreOnExit()); assertEquals(120000, prefs.exitMillis());
+        assertTrue(prefs.restoreOnExit()); assertEquals(120000, prefs.exitMillis()); assertTrue(prefs.hybridExit());
         tap("Settings"); tap("Pocket detection");
         SeekBar delay = (SeekBar) labelled("Out-of-pocket restore delay, 1 to 30 minutes");
+        Switch hybrid = (Switch) labelled("Hybrid battery\nsaver");
+        assertTrue(hybrid.isChecked()); assertTrue(hybrid.isEnabled());
+        hybrid.setChecked(false); assertFalse(prefs.hybridExit());
         assertEquals(1, delay.getProgress()); assertTrue(delay.isEnabled());
         delay.setProgress(4);
         // A user finishes a slider gesture; preserve the chosen value across a new activity.
@@ -118,9 +121,11 @@ public class MainActivityTest {
         listener.onStopTrackingTouch(delay);
         assertEquals(300000, prefs.exitMillis());
         ((Switch) labelled("Restore after\nleaving pocket")).setChecked(false);
-        assertFalse(delay.isEnabled()); assertFalse(prefs.restoreOnExit());
+        assertFalse(delay.isEnabled()); assertFalse(prefs.restoreOnExit()); assertFalse(hybrid.isEnabled());
         controller.recreate(); activity = controller.get();
         assertFalse(((Switch) labelled("Restore after\nleaving pocket")).isChecked());
+        assertFalse(((Switch) labelled("Hybrid battery\nsaver")).isChecked());
+        assertFalse(((Switch) labelled("Hybrid battery\nsaver")).isEnabled());
         assertEquals(4, ((SeekBar) labelled("Out-of-pocket restore delay, 1 to 30 minutes")).getProgress());
         prefs.data.edit().putInt("exit_minutes", 0).commit(); assertEquals(1, prefs.exitMinutes());
         prefs.data.edit().putInt("exit_minutes", 99).commit(); assertEquals(30, prefs.exitMinutes());

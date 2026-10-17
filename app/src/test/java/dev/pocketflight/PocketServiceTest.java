@@ -1,6 +1,7 @@
 package dev.pocketflight;
 
 import android.app.KeyguardManager;
+import android.app.AlarmManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.BroadcastReceiver;
@@ -35,11 +36,14 @@ import org.robolectric.annotation.Implementation;
 import org.robolectric.annotation.Implements;
 import org.robolectric.shadows.ShadowSensor;
 import org.robolectric.shadows.ShadowNetwork;
+import org.robolectric.shadows.ShadowAlarmManager;
+import org.robolectric.shadows.ShadowSystemClock;
 import org.robolectric.util.ReflectionHelpers;
 import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 35, shadows = {PocketServiceTest.TestBridge.class, PocketServiceTest.TestConnections.class}, instrumentedPackages = "dev.pocketflight")
+@Config(sdk = 35, shadows = {PocketServiceTest.TestBridge.class, PocketServiceTest.TestConnections.class,
+        PocketServiceTest.TestAlarms.class}, instrumentedPackages = "dev.pocketflight")
 public class PocketServiceTest {
     private ServiceController<PocketService> controller;
     private PocketService service;
@@ -48,6 +52,15 @@ public class PocketServiceTest {
     private QueuedWorker worker = new QueuedWorker();
     private final List<Boolean> commands = new ArrayList<>();
     private int bluetoothResult, bluetoothQueries;
+
+    @Implements(AlarmManager.class)
+    public static class TestAlarms extends ShadowAlarmManager {
+        static boolean fail;
+        @Implementation @Override protected void setAndAllowWhileIdle(int type, long when, android.app.PendingIntent operation) {
+            if (fail) throw new SecurityException("Simulated scheduling failure");
+            super.setAndAllowWhileIdle(type, when, operation);
+        }
+    }
 
     @Implements(value = Connections.class, isInAndroidSdk = false)
     public static class TestConnections {
@@ -84,6 +97,10 @@ public class PocketServiceTest {
     }
     @Before public void open() {
         TestBridge.available = true;
+        TestAlarms.fail = false;
+        // Existing regression cases explicitly exercise continuous exit detection.
+        new AppPrefs(RuntimeEnvironment.getApplication()).data.edit().putBoolean("hybrid_exit", false).commit();
+        ShadowAlarmManager.setAutoSchedule(false);
         TestConnections.wifi = FlightPolicy.ExceptionState.CLEAR; TestConnections.reads = 0;
         proximity = ShadowSensor.newInstance(Sensor.TYPE_PROXIMITY);
         ReflectionHelpers.setField(proximity, "mMaxRange", 5f);
@@ -116,8 +133,12 @@ public class PocketServiceTest {
     }
     @After public void close() { controller.destroy(); TestBridge.remote = null; }
     private void sample(float distance) {
+        sampleSensor(proximity, distance);
+    }
+    private void sampleSensor(Sensor sensor, float... values) {
         SensorEvent event = ReflectionHelpers.callConstructor(SensorEvent.class, ReflectionHelpers.ClassParameter.from(int.class, 3));
-        event.sensor = proximity; event.values[0] = distance; event.timestamp = SystemClock.elapsedRealtimeNanos();
+        event.sensor = sensor; System.arraycopy(values, 0, event.values, 0, values.length);
+        event.timestamp = SystemClock.elapsedRealtimeNanos();
         service.onSensorChanged(event);
     }
     private void advance(long seconds) { Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(seconds)); }
@@ -125,6 +146,12 @@ public class PocketServiceTest {
     private PowerManager.WakeLock monitoringWake() { return ReflectionHelpers.getField(service, "fallbackWake"); }
     private PowerManager.WakeLock transitionWake() { return ReflectionHelpers.getField(service, "shortWake"); }
     private boolean listening() { return Shadows.shadowOf(service.getSystemService(SensorManager.class)).hasListener(service); }
+    private ShadowAlarmManager alarmManager() { return Shadows.shadowOf(service.getSystemService(AlarmManager.class)); }
+    private String status() { return prefs.data.getString("status", ""); }
+    private void enableHybrid() {
+        prefs.data.edit().putBoolean("hybrid_exit", true).commit();
+        Shadows.shadowOf(Looper.getMainLooper()).idle();
+    }
     private void restart() {
         controller.destroy(); worker = new QueuedWorker();
         controller = Robolectric.buildService(PocketService.class); service = controller.get();
@@ -296,5 +323,126 @@ public class PocketServiceTest {
         finishCommand(); assertTrue(listening());
         sample(0); advance(6); finishCommand(); finishCommand();
         assertEquals(List.of(true), commands);
+    }
+    @Test public void hybridUsesFiveSecondChecksAndSleepsWithoutSensorOrCpuLocks() {
+        enableHybrid(); sample(0);
+        assertTrue(listening()); assertTrue(monitoringWake().isHeld()); assertTrue(status().startsWith("Hybrid check"));
+        advance(5);
+        assertFalse(listening()); assertFalse(monitoringWake().isHeld()); assertFalse(transitionWake().isHeld());
+        assertTrue(status().startsWith("Hybrid rest"));
+        var alarm = alarmManager().peekNextScheduledAlarm(); assertNotNull(alarm);
+        assertEquals(AlarmManager.ELAPSED_REALTIME_WAKEUP, alarm.type); assertTrue(alarm.allowWhileIdle);
+        assertEquals(0, alarm.interval); assertEquals(SystemClock.elapsedRealtime() + 60000, alarm.triggerAtTime);
+        sample(5); // A sensor event queued before suspension must not start a countdown.
+        int reads = TestConnections.reads;
+        advance(59); assertEquals(reads, TestConnections.reads); assertTrue(worker.pending.isEmpty());
+        broadcast(Intent.ACTION_SCREEN_OFF); service.onConfigurationChanged(service.getResources().getConfiguration());
+        assertFalse(listening()); assertFalse(monitoringWake().isHeld());
+        advance(1); assertTrue(listening()); assertTrue(monitoringWake().isHeld());
+        assertNull(alarmManager().peekNextScheduledAlarm());
+        advance(5); assertFalse(listening()); assertTrue(worker.pending.isEmpty());
+    }
+    @Test public void delayedHybridAlarmNeedsFreshEvidenceThenTheEntireContinuousInterval() {
+        enableHybrid(); sample(0); advance(5);
+        var alarm = alarmManager().peekNextScheduledAlarm();
+        ShadowSystemClock.simulateDeepSleep(Duration.ofMinutes(12));
+        alarmManager().fireAlarm(alarm); Shadows.shadowOf(Looper.getMainLooper()).idle();
+        assertTrue(listening()); assertTrue(worker.pending.isEmpty()); assertTrue(status().startsWith("Hybrid check"));
+        sample(5); assertTrue(status().startsWith("Out of pocket")); assertTrue(monitoringWake().isHeld());
+        assertNull(alarmManager().peekNextScheduledAlarm());
+        advance(119); assertTrue(listening()); assertTrue(worker.pending.isEmpty());
+        advance(3); finishCommand();
+        assertEquals(List.of(false), commands); assertFalse(prefs.owned()); assertFalse(monitoringWake().isHeld());
+        assertNull(alarmManager().peekNextScheduledAlarm());
+    }
+    @Test public void hybridRepocketingCancelsQueuedRestoreAndReturnsToRest() {
+        enableHybrid(); sample(5); advance(122); assertEquals(1, worker.pending.size());
+        sample(0); finishCommand();
+        assertTrue(PocketService.airplane(service)); assertTrue(prefs.owned()); assertTrue(commands.isEmpty());
+        assertFalse(listening()); assertFalse(monitoringWake().isHeld()); assertFalse(transitionWake().isHeld());
+        assertTrue(status().startsWith("Hybrid rest")); assertNotNull(alarmManager().peekNextScheduledAlarm());
+        advance(60); sample(5); advance(119); assertTrue(worker.pending.isEmpty());
+        advance(3); finishCommand(); assertEquals(List.of(false), commands);
+    }
+    @Test public void hybridAssistRequiresFreshOutsideEvidenceAndStaleTiltEndsConfirmation() {
+        Sensor light = ShadowSensor.newInstance(Sensor.TYPE_LIGHT);
+        Sensor gravity = ShadowSensor.newInstance(Sensor.TYPE_GRAVITY);
+        var sensors = Shadows.shadowOf(service.getSystemService(SensorManager.class));
+        sensors.addSensor(light); sensors.addSensor(gravity);
+        prefs.data.edit().putBoolean("pocket_assist", true).commit(); enableHybrid();
+        sample(5); sampleSensor(light, 0); sampleSensor(gravity, 9.8f, 0, 0);
+        advance(5); assertFalse(listening()); assertTrue(worker.pending.isEmpty());
+        advance(60); sample(5); sampleSensor(light, 0); sampleSensor(gravity, 0, 0, 9.8f);
+        assertTrue(status().startsWith("Out of pocket"));
+        advance(4); assertFalse(listening()); assertTrue(status().startsWith("Hybrid rest"));
+        advance(60); sampleSensor(light, 100); sampleSensor(gravity, 0, 0, 9.8f);
+        assertTrue(status().startsWith("Hybrid check")); // Still missing fresh proximity.
+        sample(5); assertTrue(status().startsWith("Out of pocket"));
+        advance(10); assertTrue(listening()); // Brightness is sufficient even after tilt ages.
+        assertTrue(worker.pending.isEmpty());
+    }
+    @Test public void hybridUnlockAndPauseDoNotWaitForTheNextCheck() {
+        enableHybrid(); sample(0); advance(5);
+        Shadows.shadowOf(service.getSystemService(KeyguardManager.class)).setIsDeviceLocked(false);
+        broadcast(Intent.ACTION_USER_PRESENT); finishCommand();
+        assertFalse(prefs.owned()); assertNull(alarmManager().peekNextScheduledAlarm());
+        Shadows.shadowOf(service.getSystemService(KeyguardManager.class)).setIsDeviceLocked(true);
+        Settings.Global.putInt(service.getContentResolver(), Settings.Global.AIRPLANE_MODE_ON, 1); prefs.owned(true);
+        service.onStartCommand(null, 0, 0); sample(0); advance(5); assertFalse(listening());
+        service.onStartCommand(new Intent(PocketService.PAUSE), 0, 0); finishCommand();
+        assertEquals(List.of(false, false), commands); assertFalse(prefs.enabled()); assertFalse(prefs.owned());
+        assertNull(alarmManager().peekNextScheduledAlarm()); assertFalse(monitoringWake().isHeld());
+    }
+    @Test public void connectionReturnInterruptsHybridRestAndCancelsItsAlarm() {
+        prefs.wifi(Set.of("Home")); enableHybrid(); sample(0); advance(5);
+        wifiChanged(FlightPolicy.ExceptionState.CONNECTED); finishCommand();
+        assertEquals(List.of(false), commands); assertFalse(prefs.owned()); assertFalse(listening());
+        assertNull(alarmManager().peekNextScheduledAlarm()); assertTrue(status().startsWith("Standby"));
+    }
+    @Test public void disablingHybridResumesContinuousSensingAndDisablingExitCancelsItsAlarm() {
+        enableHybrid(); sample(0); advance(5); assertNotNull(alarmManager().peekNextScheduledAlarm());
+        prefs.data.edit().putBoolean("hybrid_exit", false).commit(); Shadows.shadowOf(Looper.getMainLooper()).idle();
+        assertTrue(listening()); assertNull(alarmManager().peekNextScheduledAlarm());
+        sample(0); advance(65); assertTrue(listening());
+        enableHybrid(); sample(0); advance(5);
+        prefs.data.edit().putBoolean("restore_on_exit", false).commit(); Shadows.shadowOf(Looper.getMainLooper()).idle();
+        assertNull(alarmManager().peekNextScheduledAlarm()); assertFalse(monitoringWake().isHeld());
+        sample(5); advance(122); assertTrue(worker.pending.isEmpty()); assertTrue(PocketService.airplane(service));
+    }
+    @Test public void manualAirplaneModeNeverStartsHybridChecks() {
+        prefs.owned(false); enableHybrid(); sample(5); advance(122);
+        assertNull(alarmManager().peekNextScheduledAlarm()); assertTrue(worker.pending.isEmpty());
+        assertTrue(PocketService.airplane(service)); assertTrue(status().startsWith("Manual airplane mode"));
+    }
+    @Test public void hybridRestartAndSettingChangesNeverReuseAConfirmationInterval() {
+        enableHybrid(); sample(5); advance(100);
+        restart(); finishCommand(); // Reconcile durable ownership before starting fresh sensing.
+        assertTrue(status().startsWith("Hybrid check")); sample(5);
+        advance(100); assertTrue(worker.pending.isEmpty());
+        prefs.data.edit().putInt("exit_minutes", 1).commit(); Shadows.shadowOf(Looper.getMainLooper()).idle();
+        assertTrue(status().startsWith("Hybrid check")); sample(5);
+        advance(59); assertTrue(worker.pending.isEmpty()); advance(3); finishCommand();
+        assertEquals(List.of(false), commands);
+    }
+    @Test public void hybridSchedulingFailureFallsBackToContinuousSensing() {
+        TestAlarms.fail = true; enableHybrid(); sample(0); advance(5);
+        assertTrue(listening()); assertNull(alarmManager().peekNextScheduledAlarm());
+        assertTrue(status().startsWith("Hybrid unavailable"));
+        sample(5); advance(122); finishCommand(); assertEquals(List.of(false), commands);
+    }
+    @Test public void hybridDestructionCancelsAlarmAndAllWakeLocks() {
+        enableHybrid(); sample(0); advance(5);
+        assertNotNull(alarmManager().peekNextScheduledAlarm());
+        service.onDestroy();
+        assertNull(alarmManager().peekNextScheduledAlarm()); assertFalse(listening());
+        assertFalse(monitoringWake().isHeld()); assertFalse(transitionWake().isHeld());
+    }
+    @Test @Config(sdk = 30) public void android11HybridAlarmCanResumeThePrivateReceiver() {
+        enableHybrid(); sample(0); advance(5);
+        var alarm = alarmManager().peekNextScheduledAlarm(); assertNotNull(alarm);
+        ShadowSystemClock.simulateDeepSleep(Duration.ofMinutes(2));
+        alarmManager().fireAlarm(alarm); Shadows.shadowOf(Looper.getMainLooper()).idle();
+        assertTrue(listening()); assertTrue(status().startsWith("Hybrid check"));
+        sample(5); advance(122); finishCommand(); assertEquals(List.of(false), commands);
     }
 }

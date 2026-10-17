@@ -223,15 +223,22 @@ public class MainActivity extends Activity {
         SeekBar exitDelay = new SeekBar(this); exitDelay.setMax(29); exitDelay.setProgress(prefs.exitMinutes() - 1);
         exitDelay.setContentDescription("Out-of-pocket restore delay, 1 to 30 minutes");
         exitDelay.setEnabled(prefs.restoreOnExit()); restoration.addView(exitDelay);
+        Switch hybrid = new Switch(this);
+        hybrid.setText("Hybrid battery\nsaver"); hybrid.setTextSize(15); hybrid.setTextColor(INK);
+        hybrid.setMinHeight(dp(56)); hybrid.setChecked(prefs.hybridExit()); hybrid.setEnabled(prefs.restoreOnExit());
+        hybrid.setOnCheckedChangeListener((button, enabled) -> prefs.data.edit().putBoolean("hybrid_exit", enabled).apply());
         exit.setOnCheckedChangeListener((button, enabled) -> {
-            prefs.data.edit().putBoolean("restore_on_exit", enabled).apply(); exitDelay.setEnabled(enabled);
+            prefs.data.edit().putBoolean("restore_on_exit", enabled).apply(); exitDelay.setEnabled(enabled); hybrid.setEnabled(enabled);
         });
         exitDelay.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar bar, int p, boolean user) { exitLabel.setText("Restore after: " + (p + 1) + (p == 0 ? " minute" : " minutes")); }
             @Override public void onStartTrackingTouch(SeekBar bar) {}
             @Override public void onStopTrackingTouch(SeekBar bar) { prefs.data.edit().putInt("exit_minutes", bar.getProgress() + 1).apply(); }
         });
-        restoration.addView(text("Defaults to 2 minutes. Returning to the pocket or losing usable readings resets the countdown. Only airplane mode enabled by this app is restored. Watching for pocket exit can use extra battery while offline.", 13, MUTED, false));
+        restoration.addView(text("Defaults to 2 minutes after removal is detected. Returning to the pocket or losing usable readings resets the countdown. Only airplane mode enabled by this app is restored.", 13, MUTED, false));
+        restoration.addView(hybrid);
+        restoration.addView(text("On by default. Uses brief 5-second checks with sensors off for a minute between checks. Android may delay the next check by several minutes or longer, delaying detection of removal.", 13, MUTED, false));
+        restoration.addView(text("Once removal is detected, sensing stays continuous for the full restore delay. Turn Hybrid off for continuous exit sensing. Unlock and connection-based restoration still work immediately.", 13, MUTED, false));
         LinearLayout detection = card(null, "Try Pocket assist if proximity alone misses the folded phone in your pocket.");
         Switch assist = new Switch(this);
         assist.setText("Pocket assist\nDarkness + tilt"); assist.setTextSize(15); assist.setTextColor(INK);
@@ -289,7 +296,8 @@ public class MainActivity extends Activity {
         }
         if (access != null) access.setText(ready ? "✓ Shizuku connected" : ShizukuBridge.authorized() ? "Starting connection…" : "Setup needed · Shizuku access");
         if (detectionSummary != null) detectionSummary.setText("Pocket assist " + (prefs.pocketAssist() ? "on" : "off")
-                + " · " + (prefs.restoreOnExit() ? "restore after " + prefs.exitMinutes() + " min out" : "restore on unlock"));
+                + " · " + (prefs.restoreOnExit() ? "restore after " + prefs.exitMinutes() + " min detected out"
+                        + (prefs.hybridExit() ? " · hybrid" : "") : "restore on unlock"));
         Set<String> wifi = prefs.wifi();
         if (wifiSummary != null) wifiSummary.setText(wifi.isEmpty() ? "No Wi-Fi exceptions selected" : String.join("\n", new TreeSet<>(wifi)));
         Set<String> bt = prefs.bluetooth();
