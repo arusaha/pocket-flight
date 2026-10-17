@@ -13,11 +13,13 @@ import android.os.*;
 import android.provider.Settings;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import static dev.pocketflight.FlightPolicy.ExceptionState.*;
 
 public class PocketService extends Service implements SensorEventListener {
     public static final String PAUSE = "dev.pocketflight.PAUSE";
     private static final String CHANNEL = "pocket_monitor";
     private static final int NOTIFICATION = 1;
+    private static final long CONNECTION_RECHECK_MS = 60000;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private AppPrefs prefs;
@@ -25,6 +27,10 @@ public class PocketService extends Service implements SensorEventListener {
     private SensorManager sensors;
     private Sensor proximity, light, orientation;
     private boolean lightRegistered, orientationRegistered;
+    private boolean sensorsActive, sensorsNeedRefresh = true, bluetoothChecking;
+    private FlightPolicy.ExceptionState bluetoothState = UNKNOWN;
+    private long bluetoothCheckedAt = -1;
+    private int connectionGeneration;
     private final PocketDetector detector = new PocketDetector();
     private final PocketExitTimer exitTimer = new PocketExitTimer();
     private final PocketReport report = new PocketReport();
@@ -37,9 +43,7 @@ public class PocketService extends Service implements SensorEventListener {
     private long retryAt, lastEvaluationAt, sensorEpoch;
     private volatile int generation;
     private String status = "Starting…";
-    private final Runnable tick = new Runnable() {
-        @Override public void run() { evaluate(); if (!destroyed) main.postDelayed(this, 2000); }
-    };
+    private final Runnable tick = this::evaluate;
     private final SharedPreferences.OnSharedPreferenceChangeListener preferences = (p, key) -> {
         if ("enabled".equals(key) || "wifi".equals(key) || "bluetooth".equals(key) || "delay_seconds".equals(key)
                 || "pocket_assist".equals(key) || "dark_lux".equals(key)
@@ -48,7 +52,8 @@ public class PocketService extends Service implements SensorEventListener {
             retryAt = 0;
             detector.resetTimer();
             exitTimer.reset();
-            if ("pocket_assist".equals(key)) configureSensors();
+            if ("pocket_assist".equals(key)) sensorsNeedRefresh = true;
+            if ("bluetooth".equals(key)) invalidateBluetooth();
             evaluate();
         }
     };
@@ -56,12 +61,17 @@ public class PocketService extends Service implements SensorEventListener {
         @Override public void onReceive(Context c, Intent intent) {
             generation++;
             retryAt = 0;
+            String action = intent.getAction();
+            if (BluetoothDevice.ACTION_ACL_CONNECTED.equals(action) || BluetoothDevice.ACTION_ACL_DISCONNECTED.equals(action)
+                    || BluetoothAdapter.ACTION_STATE_CHANGED.equals(action)) invalidateBluetooth();
             if (Intent.ACTION_SCREEN_OFF.equals(intent.getAction())) {
                 // Re-acquire defaults after folding and demand fresh post-screen-off readings.
-                configureSensors();
-                report.begin(SystemClock.elapsedRealtime(), sensorInventory());
-                prefs.event("Screen off · pocket diagnostic started");
-                wakeBriefly();
+                // Defer registration until connection exceptions have been checked.
+                sensorsNeedRefresh = true;
+                if (sensorsActive) {
+                    report.begin(SystemClock.elapsedRealtime(), sensorInventory());
+                    prefs.event("Screen off · pocket diagnostic started");
+                }
             } else if (Intent.ACTION_SCREEN_ON.equals(intent.getAction())) {
                 detector.resetTimer();
             }
@@ -91,8 +101,6 @@ public class PocketService extends Service implements SensorEventListener {
         if (Build.VERSION.SDK_INT >= 34) startForeground(NOTIFICATION, notification(status), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
         else startForeground(NOTIFICATION, notification(status));
         sensors = getSystemService(SensorManager.class);
-        configureSensors();
-        if (!power.isInteractive()) report.begin(SystemClock.elapsedRealtime(), sensorInventory());
         IntentFilter filter = new IntentFilter();
         for (String action : new String[]{Intent.ACTION_SCREEN_OFF, Intent.ACTION_SCREEN_ON, Intent.ACTION_USER_PRESENT,
                 Intent.ACTION_AIRPLANE_MODE_CHANGED, BluetoothDevice.ACTION_ACL_CONNECTED, BluetoothDevice.ACTION_ACL_DISCONNECTED,
@@ -104,7 +112,7 @@ public class PocketService extends Service implements SensorEventListener {
         connectivity.registerNetworkCallback(new NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
                 .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET).build(), networks);
         prefs.data.registerOnSharedPreferenceChangeListener(preferences);
-        bridge = new ShizukuBridge(this, () -> main.post(() -> { retryAt = 0; evaluate(); }));
+        bridge = new ShizukuBridge(this, () -> main.post(() -> { invalidateBluetooth(); retryAt = 0; evaluate(); }));
         prefs.event("Monitor started");
         main.post(tick);
     }
@@ -141,6 +149,8 @@ public class PocketService extends Service implements SensorEventListener {
     }
     private void configureSensors() {
         sensors.unregisterListener(this);
+        sensorsActive = true;
+        sensorsNeedRefresh = false;
         sensorEpoch = SystemClock.elapsedRealtime();
         detector.reset(); exitTimer.reset(); covered = false; generation++;
         proximity = preferredSensor(Sensor.TYPE_PROXIMITY);
@@ -154,6 +164,66 @@ public class PocketService extends Service implements SensorEventListener {
             lightRegistered = light != null && sensors.registerListener(this, light, 200000);
             orientationRegistered = orientation != null && sensors.registerListener(this, orientation, 200000);
         }
+    }
+    private void suspendSensors() {
+        if (sensorsActive) {
+            sensors.unregisterListener(this);
+            sensorsActive = false;
+            sensorRegistered = lightRegistered = orientationRegistered = false;
+            detector.reset(); exitTimer.reset(); covered = false; generation++;
+            if (report.active()) {
+                report.sample(SystemClock.elapsedRealtime(), detector.readings(), "Pocket sensors suspended", true);
+                prefs.data.edit().putString("pocket_report", report.text()).apply();
+                report.end();
+            }
+        }
+        if (!busy) releaseBriefWake();
+        if (fallbackWake.isHeld()) fallbackWake.release();
+    }
+    private void resumeSensors() {
+        if (sensorsActive && !sensorsNeedRefresh) return;
+        configureSensors();
+        if (!power.isInteractive()) {
+            report.begin(SystemClock.elapsedRealtime(), sensorInventory());
+            wakeBriefly();
+        }
+    }
+
+    private void invalidateBluetooth() {
+        connectionGeneration++;
+        generation++; // Cancel an enable queued before the connection change.
+        bluetoothState = UNKNOWN;
+        bluetoothCheckedAt = -1;
+    }
+    private void cacheBluetooth(int result) {
+        bluetoothState = result == 1 ? CONNECTED : result == 0 ? CLEAR : UNKNOWN;
+        bluetoothCheckedAt = SystemClock.elapsedRealtime();
+    }
+    private FlightPolicy.ExceptionState bluetoothException(long now) {
+        if (prefs.bluetooth().isEmpty()) return CLEAR;
+        if (!bridge.ready()) return UNKNOWN;
+        if (!bluetoothChecking && (bluetoothCheckedAt < 0 || now - bluetoothCheckedAt >= CONNECTION_RECHECK_MS)) {
+            bluetoothChecking = true;
+            bluetoothState = UNKNOWN;
+            int token = connectionGeneration;
+            String[] addresses = prefs.bluetooth().toArray(new String[0]);
+            IFlightBridge remote = bridge.remote();
+            // No sensor or CPU wake lock for a connection-only check. ACL broadcasts
+            // provide prompt changes; the idle timer is only a non-waking fallback.
+            worker.execute(() -> {
+                int result;
+                try { result = remote == null ? -1 : remote.connectedBluetooth(addresses); }
+                catch (Exception e) { result = -1; }
+                int connected = result;
+                main.post(() -> {
+                    bluetoothChecking = false;
+                    if (destroyed) return;
+                    if (token == connectionGeneration) cacheBluetooth(connected);
+                    evaluate();
+                });
+            });
+        }
+        return bluetoothState;
     }
     private String describe(Sensor sensor, boolean registered) {
         return sensor == null ? "not available" : sensor.getName() + " · "
@@ -184,14 +254,14 @@ public class PocketService extends Service implements SensorEventListener {
 
     @Override public void onConfigurationChanged(android.content.res.Configuration configuration) {
         super.onConfigurationChanged(configuration);
-        configureSensors();
+        sensorsNeedRefresh = true;
         evaluate();
     }
 
     @Override public void onSensorChanged(SensorEvent event) {
         long now = SystemClock.elapsedRealtime();
         // Ignore events queued before the screen-off re-registration or from an old display sensor.
-        if (event.timestamp / 1000000L < sensorEpoch) return;
+        if (!sensorsActive || event.timestamp / 1000000L < sensorEpoch) return;
         boolean previous = covered;
         if (event.sensor == proximity) detector.proximity(event.values[0], proximity.getMaximumRange());
         else if (event.sensor == light) detector.light(event.values[0]);
@@ -218,23 +288,45 @@ public class PocketService extends Service implements SensorEventListener {
 
     private void evaluate() {
         if (destroyed || prefs == null || bridge == null) return;
+        try { evaluateState(); }
+        finally {
+            main.removeCallbacks(tick);
+            // Handler delays do not wake a sleeping CPU. Standby has no sensor loop,
+            // wake lock, wake-up alarm or Bluetooth scan; broadcasts resume it promptly.
+            if (!destroyed && (prefs.enabled() || prefs.owned())) main.postDelayed(tick,
+                    sensorsActive || busy || prefs.owned() ? 2000 : CONNECTION_RECHECK_MS);
+        }
+    }
+    private void evaluateState() {
         boolean locked = keyguard.isDeviceLocked();
         boolean screenOff = !power.isInteractive();
         boolean airplane = airplane(this);
         long now = SystemClock.elapsedRealtime();
         lastEvaluationAt = now;
-        boolean previous = covered;
-        covered = detector.candidate(now, prefs.pocketAssist() && lightRegistered && orientationRegistered, prefs.darkLux());
-        if (previous != covered) generation++;
-        updateExitTimer(now, airplane, locked);
-        prefs.data.edit().putString("sensor", detector.reason() + "\n" + detector.readings()).apply();
-        recordSession(now, locked, screenOff);
-        manageWake(airplane);
         if (locked != lastLocked) { generation++; lastLocked = locked; }
         if (!locked) suppressed = false;
         if (!locked || !screenOff) detector.resetTimer();
-        if (busy) return;
         bridge.connect();
+        Connections.Wifi wifi = Connections.wifi(this, prefs.wifi(), true);
+        boolean restoring = recovering || !prefs.enabled() || (prefs.owned() && !locked);
+        FlightPolicy.ExceptionState bluetooth = wifi.state() == CONNECTED || restoring ? CLEAR : bluetoothException(now);
+        FlightPolicy.ExceptionState connection = wifi.state() == CONNECTED || bluetooth == CONNECTED ? CONNECTED
+                : wifi.state() == UNKNOWN || bluetooth == UNKNOWN ? UNKNOWN : CLEAR;
+        boolean watchExit = prefs.owned() && airplane;
+        if (!prefs.enabled() || connection == CONNECTED || (connection == UNKNOWN && !watchExit)) {
+            suspendSensors();
+            prefs.data.edit().putString("sensor", "Pocket sensors paused while checking or connected to an exception").apply();
+        } else {
+            resumeSensors();
+            boolean previous = covered;
+            covered = detector.candidate(now, prefs.pocketAssist() && lightRegistered && orientationRegistered, prefs.darkLux());
+            if (previous != covered) generation++;
+            updateExitTimer(now, airplane, locked);
+            prefs.data.edit().putString("sensor", detector.reason() + "\n" + detector.readings()).apply();
+            recordSession(now, locked, screenOff);
+            manageWake(airplane);
+        }
+        if (busy) return;
         // Serialize recovery behind any command still executing in the privileged process.
         if (recovering) {
             if (bridge.ready() && SystemClock.elapsedRealtime() >= retryAt) recover();
@@ -249,9 +341,23 @@ public class PocketService extends Service implements SensorEventListener {
         if (!prefs.enabled() && !prefs.owned()) {
             publish("Paused"); stopSelf(); return;
         }
-        if (prefs.owned() && (!prefs.enabled() || !locked)) {
+        // A returning exception restores our own airplane mode before suspending
+        // pocket-exit sensing, so a locked phone cannot be stranded offline at home.
+        if (prefs.owned() && (!prefs.enabled() || !locked || connection == CONNECTED)) {
             if (bridge.ready() && SystemClock.elapsedRealtime() >= retryAt) changeMode(false);
             else publish("Restore pending — start Shizuku, or turn off airplane mode in Quick Settings");
+            return;
+        }
+        if (airplane && !prefs.owned()) {
+            releaseBriefWake(); publish("Manual airplane mode · left unchanged"); return;
+        }
+        if (connection != CLEAR && !prefs.owned()) {
+            releaseBriefWake();
+            if (connection == CONNECTED) publish(wifi.state() == CONNECTED
+                    ? "Standby · Wi-Fi exception connected · pocket sensors paused"
+                    : "Standby · Bluetooth exception connected · pocket sensors paused");
+            else publish("Checking exceptions · pocket sensors paused · " + (wifi.state() == UNKNOWN
+                    ? wifi.description() : bluetoothChecking ? "Checking Bluetooth connection" : "Bluetooth state unavailable — check Shizuku"));
             return;
         }
         if (exitTimer.due(now, prefs.exitMillis())) {
@@ -275,7 +381,6 @@ public class PocketService extends Service implements SensorEventListener {
         if (suppressed) { publish("Manual override · waiting for your next unlock"); return; }
         if (callActive()) { releaseBriefWake(); publish("Call in progress · staying online"); return; }
         if (!covered) { releaseBriefWake(); publish("Locked · " + detector.reason()); return; }
-        Connections.Wifi wifi = Connections.wifi(this, prefs.wifi(), true);
         if (wifi.state() != FlightPolicy.ExceptionState.CLEAR) { releaseBriefWake(); publish(wifi.description()); return; }
         long duration = detector.duration(now);
         FlightPolicy.State state = new FlightPolicy.State(prefs.enabled(), locked, screenOff, covered, duration,
@@ -290,6 +395,7 @@ public class PocketService extends Service implements SensorEventListener {
     private void checkBluetooth() {
         busy = true;
         int token = generation;
+        int connectionToken = connectionGeneration;
         String[] addresses = prefs.bluetooth().toArray(new String[0]);
         IFlightBridge remote = bridge.remote();
         wakeBriefly();
@@ -301,10 +407,10 @@ public class PocketService extends Service implements SensorEventListener {
             main.post(() -> {
                 busy = false;
                 if (destroyed) return;
+                if (connectionToken == connectionGeneration) cacheBluetooth(connected);
                 if (token != generation) { evaluate(); return; }
                 retryAt = SystemClock.elapsedRealtime() + 5000;
-                if (connected == 1) { releaseBriefWake(); publish("Bluetooth exception connected · staying online"); return; }
-                if (connected < 0) { releaseBriefWake(); publish("Bluetooth state unavailable · staying online"); return; }
+                if (connected != 0) { evaluate(); return; }
                 // Re-read every condition after the asynchronous Bluetooth query.
                 Connections.Wifi wifi = Connections.wifi(this, prefs.wifi(), true);
                 long now = SystemClock.elapsedRealtime();
@@ -366,7 +472,7 @@ public class PocketService extends Service implements SensorEventListener {
                 if (destroyed) return; // Durable ownership journal is retained for recovery.
                 boolean actual = airplane(this);
                 if (!actual) prefs.owned(false);
-                if (afterExit && "Cancelled".equals(outcome)) { retryAt = 0; evaluate(); return; }
+                if ("Cancelled".equals(outcome)) { retryAt = 0; evaluate(); return; }
                 if ("OK".equals(outcome) && actual == enabled) {
                     if (!enabled) { exitTimer.reset(); detector.resetTimer(); }
                     prefs.event(enabled ? "Pocket detected → airplane mode on" : afterExit

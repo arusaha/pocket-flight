@@ -30,7 +30,7 @@ Wi-Fi and Bluetooth can remain active according to [Android's remembered airplan
 ## What Pocket Flight does
 
 - **Automates airplane mode:** lock your phone, put it in your pocket and let sustained pocket detection trigger the switch. Unlock to restore immediately, or leave it out of your pocket for the configured delay, even while locked.
-- **Respects your connections:** a connection to any selected Wi-Fi network or Bluetooth device prevents airplane mode from turning on. A saved network or paired device alone does not count.
+- **Rests while connected:** any selected Wi-Fi network or Bluetooth device puts pocket sensing on standby and releases its CPU wake locks. Disconnect from all selected connections to resume automatically. A saved network or paired device alone does not count.
 - **Adapts to your pocket:** proximity detection plus optional **Pocket assist**, which combines darkness and tilt when proximity alone misses your pocket. Adjust the confirmation delay from 2–15 seconds.
 - **Keeps you in control:** pause and restore connectivity from the persistent notification. Airplane mode you enabled manually stays under your control.
 - **Keeps settings on your phone:** no Internet permission, cloud account or GPS coordinate collection. Connection choices and diagnostics stay in app-private storage.
@@ -46,7 +46,7 @@ While airplane mode is on, cellular calls and mobile data are interrupted. Wi-Fi
 
 ## Install
 
-1. Download `PocketFlight-1.3.apk` from [Releases](https://github.com/arusaha/pocket-flight/releases/latest) to your phone and open it from Files. Allow that app to install unknown apps when Android asks. If Samsung Auto Blocker prevents installation, review its sideloading setting in Security and privacy.
+1. Download `PocketFlight-1.4.apk` from [Releases](https://github.com/arusaha/pocket-flight/releases/latest) to your phone and open it from Files. Allow that app to install unknown apps when Android asks. If Samsung Auto Blocker prevents installation, review its sideloading setting in Security and privacy.
 2. [Install Shizuku](https://shizuku.rikka.app/download/) and follow its [wireless debugging setup](https://shizuku.rikka.app/guide/setup/). Start it, open Pocket Flight, then tap the **settings gear → Shizuku → Connect / grant Shizuku access**. Approve the request in Shizuku. No rooting is needed.
 3. In **Settings → Permissions & battery**, tap **Allow location, Bluetooth & notifications**. For Wi-Fi exceptions, select precise location, then use **App settings** → Permissions → Location → **Allow all the time**. Keep Android's Location switch enabled. Bluetooth selection requires Nearby devices access. Notifications provide the persistent pause control.
 4. In **Settings → Connection exceptions**, select your exact Wi-Fi network name(s) and paired Bluetooth device(s). You can add the currently connected Wi-Fi network or type its name. Either kind of matching connection prevents airplane mode. The app remembers the choices locally.
@@ -54,6 +54,18 @@ While airplane mode is on, cellular calls and mobile data are interrupted. Wi-Fi
 6. In **Settings → Diagnostics**, run **Test proximity sensor** on both the cover and inner screens, then **Read-only connection check**. Return to the main screen, tap **Start monitoring**, and follow the physical test checklist below.
 
 After a phone restart, **start Shizuku again**. Pocket Flight attempts to resume monitoring automatically; opening it will also resume it. Android/Samsung can still stop background apps.
+
+## Version 1.4: let pocket sensing rest at home
+
+Connected to your selected home Wi-Fi, headphones or watch? Pocket Flight now shows **Standby**, unregisters all pocket sensors (including Pocket assist), and releases their CPU wake locks. It checks connections before starting the sensors, including Bluetooth devices already connected when monitoring starts. The main button still says **Stop monitoring**, because automation is enabled and will resume on its own.
+
+Disconnect from **all** selected connections and sensing resumes with fresh readings and a new confirmation delay. Wi-Fi network callbacks and Bluetooth connection broadcasts handle changes; a one-minute fallback recheck runs only when Android lets the CPU run. There is no Bluetooth scanning or wake-up alarm. The foreground notification remains available, so you can still stop automation. Battery savings have not been measured on a phone.
+
+If a selected connection returns while airplane mode enabled by Pocket Flight is on, the app restores connectivity before entering standby. This requires Wi-Fi or Bluetooth to have remained on in airplane mode; the app does not turn radios on to search for home. If both are off, the existing **2-minute out-of-pocket restore** (configurable) and immediate unlock restoration still apply. Manually enabled airplane mode stays unchanged.
+
+If an exception cannot be checked, pocket entry stays paused with an explanation. If Pocket Flight already owns airplane mode, it keeps watching for pocket exit until it can restore, so an unavailable connection check cannot strand it offline.
+
+To update, **Stop monitoring** and confirm airplane mode is off, then install the **1.4 APK over the existing app**. Do not uninstall first; settings are retained. Open the app and start monitoring again. No new setting is needed for connection standby.
 
 ## Version 1.3: reconnect after leaving your pocket
 
@@ -97,9 +109,9 @@ The confirmation timer now tolerates clear gaps up to 800 ms without discarding 
 
 - Requires screen off, device actually locked, and sustained pocket evidence for the chosen delay (5 seconds by default, adjustable from 2–15). Evidence is proximity coverage or, when explicitly enabled, the Pocket assist fallback described above.
 - Checks Wi-Fi and Bluetooth immediately before enabling airplane mode. Wi-Fi matching is exact and case-sensitive; Bluetooth matching uses the selected paired device's address and checks the current connection, including connections that existed before monitoring started.
-- A connected selected network **or** device prevents entry. Pairing/saving alone does not prevent it. If a configured exception cannot be checked, entry is blocked.
+- A connected selected network **or** device suspends pocket sensors and their CPU wake locks. Monitoring resumes when all selected connections disconnect. Pairing/saving alone does not prevent entry. If a configured exception cannot be checked, entry is blocked without running pocket sensors; existing app-owned pocket-exit restoration remains available.
 - Wi-Fi without internet still counts, including when mobile data or a VPN is the default network.
-- Once enabled by Pocket Flight, airplane mode stays on until unlock or the configured continuous out-of-pocket interval (2 minutes by default). Waking the lock screen alone does not restore it. Disable pocket-exit restoration for unlock-only behavior.
+- Once enabled by Pocket Flight, airplane mode stays on until unlock, a selected connection returns, or the configured continuous out-of-pocket interval (2 minutes by default). Waking the lock screen alone does not restore it. Disabling pocket-exit restoration still allows unlock, connection and manual pause restoration.
 - **Stop monitoring** in the app, or **Pause & restore** in the notification, stops automation and turns off airplane mode enabled by this app.
 - Manually enabled airplane mode is left unchanged. Manually switching airplane mode off while locked suppresses re-entry for that lock session.
 - Active Android call/communication audio modes block entry. This is a best-effort extra check, not a guarantee against every OEM or app-specific call implementation.
@@ -114,7 +126,7 @@ Yes, with Pocket Flight and Shizuku on a supported phone. Android does not let o
 
 ### Can I keep airplane mode off when connected to home Wi-Fi or a Bluetooth device?
 
-Yes. Select your Wi-Fi network names and paired Bluetooth devices in the app. If any selected connection is active, Pocket Flight will not enable airplane mode. You can use this for home Wi-Fi, headphones, a smartwatch or another connected Bluetooth device. If the app cannot verify a configured exception, it blocks entry into airplane mode.
+Yes. Select your Wi-Fi network names and paired Bluetooth devices in the app. If any selected connection is active, Pocket Flight pauses pocket sensing and will not enable airplane mode. It resumes automatically after all selected connections disconnect. You can use this for home Wi-Fi, headphones, a smartwatch or another connected Bluetooth device. If the app cannot verify a configured exception, it blocks entry into airplane mode.
 
 ### Can I reduce phone EMF while walking or running with it in my pocket?
 
@@ -130,7 +142,7 @@ Version 1.1 has one successful user report on a Galaxy Z Fold8 running Android 1
 
 ### Does automatic airplane mode save battery?
 
-Battery savings have not been measured. Switching radios off can reduce their activity, but monitoring sensors and keeping the CPU awake when needed consumes power. Pocket assist can add to that cost. Treat Pocket Flight as a connectivity automation tool and compare battery use on your own phone.
+Battery savings have not been measured. Version 1.4 stops pocket sensors and releases their CPU wake locks while any selected Wi-Fi or Bluetooth connection is active. A lightweight service remains to notice disconnections. Away from these connections, monitoring sensors and keeping the CPU awake when needed consumes power; Pocket assist can add to that cost. Treat Pocket Flight as a connectivity automation tool and compare battery use on your own phone.
 
 ### Why does it need location permission for Wi-Fi exceptions?
 
@@ -167,9 +179,13 @@ Android controls which radios airplane mode disables and can remember that Wi-Fi
 | Change exit delay to 1 minute, then repeat the locked pocket-exit test | Restoration uses the new full interval |
 | Disable Restore after leaving pocket and repeat | Airplane mode stays on until unlock or pause |
 | Manually enable airplane mode and leave phone out of pocket | Manual airplane mode remains on |
-| Connected to selected Wi-Fi before starting monitor | Airplane mode stays off when pocketed |
-| Connected to selected Bluetooth before starting monitor | Airplane mode stays off when pocketed |
-| Selected Wi-Fi unavailable, selected Bluetooth connected | Airplane mode stays off |
+| Connected to selected Wi-Fi before starting monitor | Standby; pocket sensors paused; airplane mode stays off |
+| Connected to selected Bluetooth before starting monitor | Standby after connection check; pocket sensors paused |
+| Selected Wi-Fi unavailable, selected Bluetooth connected | Standby continues; airplane mode stays off |
+| Disconnect one exception while another remains connected | Standby continues |
+| Disconnect every selected connection while still locked | Pocket sensing resumes; a fresh full confirmation delay is required |
+| Lock or fold the phone while a selected connection is active | Standby continues; pocket sensors remain paused |
+| Selected Wi-Fi or Bluetooth reconnects while app-owned airplane mode is on | Connectivity restores, then standby; requires that radio to have remained on |
 | Paired Bluetooth disconnected; no selected Wi-Fi connected | Normal pocket trigger works |
 | Revoke location / disable Location with selected Wi-Fi connected | Entry is blocked with an explanatory status |
 | Pause while app-owned airplane mode is on | Airplane mode turns off |
@@ -207,6 +223,8 @@ Tests exercise entry guards, restoration precedence, manual ownership, exception
 Version 1.2 also has Robolectric checks for the native UI, settings navigation, saved preferences, restoration controls and animation lifecycle, plus pure tests that keep restoration and setup errors visible on the home screen. Native-rendered UI previews are written under `app/build/ui-preview/` during the UI tests. These checks do not replace a test on your physical phone.
 
 Version 1.3 adds exit-evidence and countdown tests, saved exit-setting checks, and service tests using a fake Shizuku transport. They exercise locked restoration, re-pocketing before a queued command, manual airplane mode, missing readings, screen-off wake locks and Shizuku loss. The new behavior still needs the physical pocket-exit checks above on your phone.
+
+Version 1.4 adds service checks for sensor unregistration and wake-lock release during connection standby, startup connections, both exception types together, idle rechecks, fresh readings after disconnect, stale Bluetooth replies, cancellation of queued entry, reconnection restoration and unknown connection states. These use fake connection and Shizuku responses; real Samsung background behavior and battery savings still require phone testing.
 
 ## Platform references
 

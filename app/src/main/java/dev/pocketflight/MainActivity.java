@@ -205,14 +205,14 @@ public class MainActivity extends Activity {
         column.addView(text("If Shizuku stops while airplane mode is on, restore connectivity in Quick Settings.", 13, MUTED, false));
     }
     private void buildConnections() {
-        LinearLayout exceptions = card("Stay connected here", "Any selected Wi-Fi network OR Bluetooth device prevents airplane mode while connected. Saved or paired alone does not count.");
+        LinearLayout exceptions = card("Stay connected here", "While any selected Wi-Fi network or Bluetooth device is connected, pocket sensors pause to save power. They resume after all selected connections disconnect. Saved or paired alone does not count.");
         exceptions.addView(text("WI-FI NETWORKS", 11, GREEN, true));
         wifiSummary = text("None selected", 15, INK, false); exceptions.addView(wifiSummary);
         exceptions.addView(button("Choose Wi-Fi exceptions", false, this::wifiDialog));
         exceptions.addView(text("BLUETOOTH DEVICES", 11, GREEN, true));
         btSummary = text("None selected", 15, INK, false); exceptions.addView(btSummary);
         exceptions.addView(button("Choose paired devices", false, this::bluetoothDialog));
-        exceptions.addView(text("If a selected exception cannot be checked, the app stays online.", 13, MUTED, false));
+        exceptions.addView(text("A returning connection also turns off airplane mode enabled by Pocket Flight. Your manual airplane mode stays unchanged. If an exception cannot be checked, the app stays online.", 13, MUTED, false));
     }
     private void buildDetection() {
         LinearLayout restoration = card("After leaving your pocket", "Restore connectivity while the phone is still locked. Unlocking still restores immediately.");
@@ -264,7 +264,7 @@ public class MainActivity extends Activity {
         reliability.addView(button("Allow location, Bluetooth & notifications", false, this::requestPermissions));
         reliability.addView(button("App settings · location & battery", false, this::appSettings));
         reliability.addView(text("Samsung: set Battery to Unrestricted for Pocket Flight and Shizuku. Unrestricted apps may be absent from Never sleeping apps; leave them unrestricted. Keep both out of Sleeping and Deep sleeping apps. Enable “Lock instantly with Side button” in Secure lock settings.", 14, MUTED, false));
-        reliability.addView(text("Monitoring has a persistent notification. If your sensor cannot wake the phone, the app keeps the CPU awake while checking with the screen off; this uses more battery.", 13, MUTED, false));
+        reliability.addView(text("Monitoring has a persistent notification. Pocket sensors and their CPU wake locks pause while a selected connection is active. Otherwise, sensors that cannot wake the phone need the CPU kept awake while checking with the screen off; this uses more battery.", 13, MUTED, false));
     }
     private void buildDiagnostics() {
         LinearLayout diagnostics = card(null, null);

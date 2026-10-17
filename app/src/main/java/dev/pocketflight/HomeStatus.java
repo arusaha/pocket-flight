@@ -16,6 +16,10 @@ public record HomeStatus(String title, String detail, String button) {
                 || current.startsWith("Could not") || current.startsWith("Recovery pending"))
             return new HomeStatus("Needs attention", current, button);
         if (current.startsWith("Manual airplane mode")) return new HomeStatus("Manual airplane mode", "Your manual setting is left unchanged", button);
+        if (current.startsWith("Standby · ")) return new HomeStatus("Standby",
+                "Connected to a saved exception · pocket sensors paused", button);
+        if (current.startsWith("Checking exceptions · ")) return new HomeStatus("Checking connections",
+                current.substring("Checking exceptions · ".length()), button);
         return new HomeStatus("Monitoring", "Waiting for your phone to be locked and pocketed", button);
     }
 }

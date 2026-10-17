@@ -2,8 +2,13 @@ package dev.pocketflight;
 
 import android.app.KeyguardManager;
 import android.content.Context;
+import android.content.Intent;
+import android.content.BroadcastReceiver;
+import android.bluetooth.BluetoothDevice;
+import android.net.ConnectivityManager;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
+import android.hardware.SensorManager;
 import android.os.Looper;
 import android.os.PowerManager;
 import android.os.SystemClock;
@@ -12,6 +17,7 @@ import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.AbstractExecutorService;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -22,29 +28,44 @@ import org.junit.runner.RunWith;
 import org.robolectric.Robolectric;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.Shadows;
+import org.robolectric.RuntimeEnvironment;
 import org.robolectric.android.controller.ServiceController;
 import org.robolectric.annotation.Config;
 import org.robolectric.annotation.Implementation;
 import org.robolectric.annotation.Implements;
 import org.robolectric.shadows.ShadowSensor;
+import org.robolectric.shadows.ShadowNetwork;
 import org.robolectric.util.ReflectionHelpers;
 import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 35, shadows = PocketServiceTest.TestBridge.class, instrumentedPackages = "dev.pocketflight")
+@Config(sdk = 35, shadows = {PocketServiceTest.TestBridge.class, PocketServiceTest.TestConnections.class}, instrumentedPackages = "dev.pocketflight")
 public class PocketServiceTest {
     private ServiceController<PocketService> controller;
     private PocketService service;
     private AppPrefs prefs;
     private Sensor proximity;
-    private final QueuedWorker worker = new QueuedWorker();
+    private QueuedWorker worker = new QueuedWorker();
     private final List<Boolean> commands = new ArrayList<>();
+    private int bluetoothResult, bluetoothQueries;
+
+    @Implements(value = Connections.class, isInAndroidSdk = false)
+    public static class TestConnections {
+        static FlightPolicy.ExceptionState wifi = FlightPolicy.ExceptionState.CLEAR;
+        static int reads;
+        @Implementation protected static Connections.Wifi wifi(Context context, Set<String> exemptions, boolean background) {
+            reads++;
+            return new Connections.Wifi(exemptions.isEmpty() ? FlightPolicy.ExceptionState.CLEAR : wifi,
+                    wifi == FlightPolicy.ExceptionState.CONNECTED ? "Exception: Home" : "Wi-Fi connection check", "Home");
+        }
+    }
 
     @Implements(value = ShizukuBridge.class, isInAndroidSdk = false)
     public static class TestBridge {
         static boolean available;
         static IFlightBridge remote;
-        @Implementation protected void __constructor__(Context context, Runnable changed) {}
+        static Runnable changed;
+        @Implementation protected void __constructor__(Context context, Runnable callback) { changed = callback; }
         @Implementation protected void connect() {}
         @Implementation protected boolean ready() { return available; }
         @Implementation protected IFlightBridge remote() { return remote; }
@@ -63,17 +84,18 @@ public class PocketServiceTest {
     }
     @Before public void open() {
         TestBridge.available = true;
-        controller = Robolectric.buildService(PocketService.class).create(); service = controller.get();
-        ExecutorService original = ReflectionHelpers.getField(service, "worker"); original.shutdown();
-        ReflectionHelpers.setField(service, "worker", worker);
-        prefs = new AppPrefs(service);
-        Shadows.shadowOf(service.getSystemService(KeyguardManager.class)).setIsDeviceLocked(true);
-        Shadows.shadowOf(service.getSystemService(PowerManager.class)).setIsInteractive(false);
+        TestConnections.wifi = FlightPolicy.ExceptionState.CLEAR; TestConnections.reads = 0;
         proximity = ShadowSensor.newInstance(Sensor.TYPE_PROXIMITY);
         ReflectionHelpers.setField(proximity, "mMaxRange", 5f);
         ReflectionHelpers.setField(proximity, "mFlags", 1); // Wake-up on-change proximity.
-        ReflectionHelpers.setField(service, "proximity", proximity);
-        ReflectionHelpers.setField(service, "sensorRegistered", true);
+        Shadows.shadowOf(RuntimeEnvironment.getApplication().getSystemService(SensorManager.class)).addSensor(proximity);
+        controller = Robolectric.buildService(PocketService.class); service = controller.get();
+        ExecutorService original = ReflectionHelpers.getField(service, "worker"); original.shutdown();
+        ReflectionHelpers.setField(service, "worker", worker);
+        controller.create();
+        prefs = new AppPrefs(service);
+        Shadows.shadowOf(service.getSystemService(KeyguardManager.class)).setIsDeviceLocked(true);
+        Shadows.shadowOf(service.getSystemService(PowerManager.class)).setIsInteractive(false);
         Settings.Global.putInt(service.getContentResolver(), Settings.Global.AIRPLANE_MODE_ON, 1);
         prefs.owned(true); prefs.enabled(true);
         TestBridge.remote = new IFlightBridge.Stub() {
@@ -82,10 +104,14 @@ public class PocketServiceTest {
                 Settings.Global.putInt(service.getContentResolver(), Settings.Global.AIRPLANE_MODE_ON, enabled ? 1 : 0);
                 return "OK";
             }
-            @Override public int connectedBluetooth(String[] addresses) { return 0; }
+            @Override public int connectedBluetooth(String[] addresses) {
+                if (addresses.length == 0) return 0;
+                bluetoothQueries++; return bluetoothResult;
+            }
             @Override public String probe() { return PocketService.airplane(service) ? "OK: enabled" : "OK: disabled"; }
             @Override public void destroy() {}
         };
+        service.onStartCommand(null, 0, 0);
         sample(0);
     }
     @After public void close() { controller.destroy(); TestBridge.remote = null; }
@@ -97,6 +123,33 @@ public class PocketServiceTest {
     private void advance(long seconds) { Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(seconds)); }
     private void finishCommand() { worker.runNext(); Shadows.shadowOf(Looper.getMainLooper()).idle(); }
     private PowerManager.WakeLock monitoringWake() { return ReflectionHelpers.getField(service, "fallbackWake"); }
+    private PowerManager.WakeLock transitionWake() { return ReflectionHelpers.getField(service, "shortWake"); }
+    private boolean listening() { return Shadows.shadowOf(service.getSystemService(SensorManager.class)).hasListener(service); }
+    private void restart() {
+        controller.destroy(); worker = new QueuedWorker();
+        controller = Robolectric.buildService(PocketService.class); service = controller.get();
+        ExecutorService original = ReflectionHelpers.getField(service, "worker"); original.shutdown();
+        ReflectionHelpers.setField(service, "worker", worker);
+        controller.create();
+        service.onStartCommand(null, 0, 0); Shadows.shadowOf(Looper.getMainLooper()).idle();
+    }
+    private void online() {
+        prefs.owned(false);
+        Settings.Global.putInt(service.getContentResolver(), Settings.Global.AIRPLANE_MODE_ON, 0);
+        service.onStartCommand(null, 0, 0);
+    }
+    private void broadcast(String action) {
+        BroadcastReceiver receiver = ReflectionHelpers.getField(service, "events");
+        receiver.onReceive(service, new Intent(action));
+        Shadows.shadowOf(Looper.getMainLooper()).idle();
+    }
+    private void wifiChanged(FlightPolicy.ExceptionState state) {
+        TestConnections.wifi = state;
+        ConnectivityManager.NetworkCallback callback = ReflectionHelpers.getField(service, "networks");
+        if (state == FlightPolicy.ExceptionState.CLEAR) callback.onLost(ShadowNetwork.newInstance(42));
+        else callback.onAvailable(ShadowNetwork.newInstance(42));
+        Shadows.shadowOf(Looper.getMainLooper()).idle();
+    }
 
     @Test public void restoresAfterTwoMinutesOutsideWhileStillLockedAndReleasesCountdownWake() {
         assertTrue(proximity.isWakeUpSensor()); assertFalse(monitoringWake().isHeld());
@@ -138,5 +191,110 @@ public class PocketServiceTest {
         Shadows.shadowOf(service.getSystemService(KeyguardManager.class)).setIsDeviceLocked(false);
         service.onStartCommand(null, 0, 0); finishCommand();
         assertEquals(List.of(false), commands); assertFalse(prefs.owned());
+    }
+    @Test public void selectedWifiSuspendsEverySensorAndWakeLockWithoutWaitingForPocket() {
+        online(); sample(5);
+        ReflectionHelpers.setField(proximity, "mFlags", 0);
+        Sensor light = ShadowSensor.newInstance(Sensor.TYPE_LIGHT);
+        Sensor gravity = ShadowSensor.newInstance(Sensor.TYPE_GRAVITY);
+        var manager = Shadows.shadowOf(service.getSystemService(SensorManager.class));
+        manager.addSensor(light); manager.addSensor(gravity);
+        prefs.data.edit().putBoolean("pocket_assist", true).commit();
+        broadcast(Intent.ACTION_SCREEN_OFF);
+        assertTrue(manager.hasListener(service, proximity));
+        assertTrue(manager.hasListener(service, light)); assertTrue(manager.hasListener(service, gravity));
+        assertTrue(monitoringWake().isHeld());
+        prefs.wifi(Set.of("Home")); wifiChanged(FlightPolicy.ExceptionState.CONNECTED);
+        assertFalse(listening()); assertFalse(monitoringWake().isHeld()); assertFalse(transitionWake().isHeld());
+        assertTrue(prefs.data.getString("status", "").startsWith("Standby · Wi-Fi"));
+        broadcast(Intent.ACTION_SCREEN_OFF);
+        service.onConfigurationChanged(service.getResources().getConfiguration());
+        sample(0); // An old queued sensor event cannot restart detection or acquire a lock.
+        assertFalse(listening()); assertFalse(transitionWake().isHeld()); assertFalse(monitoringWake().isHeld());
+        int reads = TestConnections.reads;
+        advance(59); assertEquals(reads, TestConnections.reads); assertTrue(worker.pending.isEmpty());
+        advance(1); assertEquals(reads + 1, TestConnections.reads); assertFalse(listening());
+    }
+    @Test public void knownWifiAtStartupDoesNotRegisterSensorsEvenWhenShizukuUnavailable() {
+        online(); prefs.wifi(Set.of("Home")); TestConnections.wifi = FlightPolicy.ExceptionState.CONNECTED;
+        TestBridge.available = false; restart();
+        assertFalse(listening()); assertFalse(monitoringWake().isHeld()); assertFalse(transitionWake().isHeld());
+        assertTrue(prefs.data.getString("status", "").startsWith("Standby · Wi-Fi"));
+    }
+    @Test public void disconnectRequiresFreshReadingsAndFullEntryDelay() {
+        online(); prefs.wifi(Set.of("Home")); sample(0); advance(4);
+        wifiChanged(FlightPolicy.ExceptionState.CONNECTED); advance(20);
+        wifiChanged(FlightPolicy.ExceptionState.CLEAR);
+        assertTrue(listening()); advance(8); assertTrue(worker.pending.isEmpty());
+        sample(0); advance(4); assertTrue(worker.pending.isEmpty());
+        advance(2); finishCommand(); finishCommand();
+        assertEquals(List.of(true), commands); assertTrue(PocketService.airplane(service));
+    }
+    @Test public void bluetoothAlreadyConnectedIsCheckedBeforeSensorsAndUsesIdleRechecks() {
+        online(); bluetoothResult = 1; prefs.bluetooth(Set.of("AA:BB:CC:DD:EE:FF"));
+        restart();
+        assertFalse(listening()); finishCommand();
+        assertFalse(listening()); assertFalse(monitoringWake().isHeld()); assertFalse(transitionWake().isHeld());
+        assertTrue(prefs.data.getString("status", "").startsWith("Standby · Bluetooth"));
+        assertEquals(1, bluetoothQueries); advance(59); assertTrue(worker.pending.isEmpty());
+        advance(1); finishCommand(); assertEquals(2, bluetoothQueries);
+        bluetoothResult = 0; broadcast(BluetoothDevice.ACTION_ACL_DISCONNECTED);
+        assertFalse(listening()); finishCommand(); assertTrue(listening());
+    }
+    @Test public void eitherConnectionKeepsStandbyUntilBothHaveDisconnected() {
+        online(); prefs.wifi(Set.of("Home")); bluetoothResult = 1;
+        wifiChanged(FlightPolicy.ExceptionState.CONNECTED);
+        prefs.bluetooth(Set.of("AA:BB:CC:DD:EE:FF")); broadcast(BluetoothDevice.ACTION_ACL_CONNECTED);
+        assertFalse(listening()); assertTrue(worker.pending.isEmpty()); // Wi-Fi alone is sufficient.
+        wifiChanged(FlightPolicy.ExceptionState.CLEAR); finishCommand();
+        assertFalse(listening());
+        wifiChanged(FlightPolicy.ExceptionState.CONNECTED);
+        bluetoothResult = 0; broadcast(BluetoothDevice.ACTION_ACL_DISCONNECTED); assertFalse(listening());
+        wifiChanged(FlightPolicy.ExceptionState.CLEAR); finishCommand();
+        assertTrue(listening()); assertTrue(commands.isEmpty());
+    }
+    @Test public void connectionChangeInvalidatesAnEnableAlreadyQueuedToTheWorker() {
+        online(); prefs.wifi(Set.of("Home")); sample(0); advance(6); finishCommand();
+        assertEquals(1, worker.pending.size()); assertTrue(prefs.owned());
+        wifiChanged(FlightPolicy.ExceptionState.CONNECTED); finishCommand();
+        assertTrue(commands.isEmpty()); assertFalse(prefs.owned()); assertFalse(listening());
+        assertFalse(transitionWake().isHeld());
+        assertTrue(prefs.data.getString("status", "").startsWith("Standby"));
+    }
+    @Test public void staleBluetoothReplyCannotResumeSensorsAfterAConnectionEvent() {
+        online(); prefs.bluetooth(Set.of("AA:BB:CC:DD:EE:FF"));
+        service.onStartCommand(null, 0, 0); Shadows.shadowOf(Looper.getMainLooper()).idle();
+        worker.runNext(); // A clear reply has been posted but not delivered to the main thread.
+        bluetoothResult = 1; broadcast(BluetoothDevice.ACTION_ACL_CONNECTED);
+        assertFalse(listening()); assertEquals(1, worker.pending.size());
+        finishCommand(); assertFalse(listening()); assertEquals(2, bluetoothQueries);
+    }
+    @Test public void reconnectRestoresOwnedAirplaneModeBeforeStandbyButLeavesManualModeAlone() {
+        prefs.wifi(Set.of("Home")); wifiChanged(FlightPolicy.ExceptionState.CONNECTED);
+        assertFalse(listening()); finishCommand();
+        assertEquals(List.of(false), commands); assertFalse(prefs.owned()); assertFalse(monitoringWake().isHeld());
+        assertFalse(transitionWake().isHeld()); assertFalse(listening());
+        Settings.Global.putInt(service.getContentResolver(), Settings.Global.AIRPLANE_MODE_ON, 1);
+        broadcast(Intent.ACTION_AIRPLANE_MODE_CHANGED); advance(122);
+        assertTrue(worker.pending.isEmpty()); assertTrue(PocketService.airplane(service));
+        assertTrue(prefs.data.getString("status", "").startsWith("Manual airplane mode"));
+    }
+    @Test public void unknownConnectionParksEntryButKeepsOwnedPocketExitAndUnlockRestoration() {
+        prefs.wifi(Set.of("Home")); wifiChanged(FlightPolicy.ExceptionState.UNKNOWN);
+        assertTrue(listening()); sample(5); advance(122); finishCommand();
+        assertEquals(List.of(false), commands); assertFalse(listening());
+        assertTrue(prefs.data.getString("status", "").startsWith("Checking exceptions"));
+        Settings.Global.putInt(service.getContentResolver(), Settings.Global.AIRPLANE_MODE_ON, 1); prefs.owned(true);
+        Shadows.shadowOf(service.getSystemService(KeyguardManager.class)).setIsDeviceLocked(false);
+        broadcast(Intent.ACTION_USER_PRESENT); finishCommand(); assertFalse(prefs.owned());
+    }
+    @Test public void shizukuReconnectRefreshesBluetoothAndPairedOnlyDeviceDoesNotBlockMonitoring() {
+        online(); prefs.bluetooth(Set.of("AA:BB:CC:DD:EE:FF")); bluetoothResult = -1;
+        service.onStartCommand(null, 0, 0); Shadows.shadowOf(Looper.getMainLooper()).idle(); finishCommand();
+        assertFalse(listening()); assertTrue(commands.isEmpty());
+        bluetoothResult = 0; TestBridge.changed.run(); Shadows.shadowOf(Looper.getMainLooper()).idle();
+        finishCommand(); assertTrue(listening());
+        sample(0); advance(6); finishCommand(); finishCommand();
+        assertEquals(List.of(true), commands);
     }
 }

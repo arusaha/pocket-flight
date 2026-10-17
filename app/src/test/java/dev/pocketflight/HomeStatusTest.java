@@ -10,6 +10,21 @@ public class HomeStatusTest {
         assertEquals("Waiting for your phone to be locked and pocketed", status.detail());
         assertEquals("Stop monitoring", status.button());
     }
+    @Test public void connectionStandbyIsVisibleButCannotHideRestorationOrSetup() {
+        String service = "Standby · Wi-Fi exception connected · pocket sensors paused";
+        HomeStatus display = HomeStatus.from(true, false, true, true, service);
+        assertEquals("Standby", display.title()); assertTrue(display.detail().contains("sensors paused"));
+        assertEquals("Stop monitoring", display.button());
+        assertEquals("Restore needed", HomeStatus.from(true, true, false, false, service).title());
+        assertEquals("Setup needed", HomeStatus.from(true, false, false, false, service).title());
+        assertEquals("Paused", HomeStatus.from(false, false, true, true, service).title());
+    }
+    @Test public void unknownConnectionsExplainWhySensorsArePaused() {
+        HomeStatus display = HomeStatus.from(true, false, true, true,
+                "Checking exceptions · pocket sensors paused · Wi-Fi name unavailable");
+        assertEquals("Checking connections", display.title());
+        assertTrue(display.detail().contains("Wi-Fi name unavailable"));
+    }
     @Test public void stoppedStateDoesNotShowStaleServiceStatus() {
         assertEquals(new HomeStatus("Paused", "Automation is off", "Start monitoring"),
                 HomeStatus.from(false, false, true, true, "Ready · lock your phone"));

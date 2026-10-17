@@ -79,6 +79,7 @@ public class MainActivityTest {
             tap(section); labelled("Back to settings");
             if (section.equals("Diagnostics")) { labelled("Test proximity sensor"); labelled("Last pocket report"); screenshot("diagnostics"); }
             if (section.equals("Pocket detection")) screenshot("detection");
+            if (section.equals("Connection exceptions")) screenshot("connections");
             activity.onBackPressed(); labelled("Back to main screen");
         }
         activity.onBackPressed(); labelled("Start monitoring");
